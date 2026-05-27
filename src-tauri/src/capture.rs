@@ -17,7 +17,7 @@ pub use windows_impl::*;
 mod windows_impl {
     use super::*;
     use windows::{
-        core::HSTRING,
+        core::{Interface, HSTRING},
         Win32::{
             Foundation::{BOOL, HWND, LPARAM},
             UI::WindowsAndMessaging::{
@@ -80,11 +80,9 @@ mod windows_impl {
     /// 本格運用では専用スレッドに移動し、チャネル経由で送信してください。
     pub fn capture_window_frame(hwnd_val: u64) -> Result<CapturedFrame> {
         use windows::{
-            core::IInspectable,
             Graphics::{
                 Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem},
                 DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
-                Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap},
             },
             Win32::{
                 Foundation::HWND,
@@ -172,14 +170,9 @@ mod windows_impl {
         surface: &windows::Graphics::DirectX::Direct3D11::IDirect3DSurface,
         context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     ) -> Result<(Vec<u8>, u32, u32)> {
-        use windows::{
-            Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap},
-            Win32::{
-                Graphics::Direct3D11::{
-                    ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
-                    D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
-                },
-            },
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+            D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
         };
 
         // IDirect3DSurface → ID3D11Texture2D

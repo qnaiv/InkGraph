@@ -17,7 +17,7 @@ tauri-build = { version = "2.6.2" }
 
 [dependencies]
 # Tauri core
-tauri            = { version = "2.11.2", features = ["protocol-asset"] }
+tauri            = { version = "2.11.2" }
 tauri-plugin-log    = "2"
 tauri-plugin-sql    = { version = "2", features = ["sqlite"] }
 tauri-plugin-shell  = "2"
@@ -61,7 +61,14 @@ windows = { version = "0.58", features = [
     # Win32 for HWND enumeration
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+
+    # WinRT interop
+    "Win32_System_WinRT",
     "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
+
+    # Direct3D / DXGI (capture + device)
+    "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",

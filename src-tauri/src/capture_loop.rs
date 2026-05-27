@@ -5,10 +5,10 @@
 /// フロントエンドへイベントを送信します。
 
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter};
 use crate::{
     state::AppState,
-    types::{CaptureStatusPayload, MatchDetectedPayload},
+    types::CaptureStatusPayload,
 };
 
 /// キャプチャループのメインエントリポイント

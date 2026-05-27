@@ -1,6 +1,6 @@
 use crate::{
     capture::CapturedFrame,
-    ocr::{ocr_from_bgra, preprocess_bgra},
+    ocr::ocr_from_bgra,
 };
 use anyhow::Result;
 /// IkaVision XP — リザルト検知モジュール

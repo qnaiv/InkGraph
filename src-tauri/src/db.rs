@@ -3,7 +3,6 @@
 /// tauri-plugin-sql を使って SQLite に対する CRUD 操作を提供します。
 /// マイグレーションは `migrations/` ディレクトリで管理します。
 use crate::types::Match;
-use anyhow::Result;
 use chrono::Utc;
 use serde_json::Value;
 use uuid::Uuid;

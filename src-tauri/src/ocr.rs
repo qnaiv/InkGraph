@@ -16,8 +16,9 @@ pub use windows_impl::*;
 mod windows_impl {
     use super::*;
     use windows::{
+        core::Interface,
         Globalization::Language,
-        Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap},
+        Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap},
         Media::Ocr::OcrEngine,
         Storage::Streams::{DataWriter, InMemoryRandomAccessStream},
     };
@@ -37,15 +38,6 @@ mod windows_impl {
     ) -> Result<OcrText> {
         // ── SoftwareBitmap を構築 ──────────────────────────────────────
         let bitmap = SoftwareBitmap::Create(BitmapPixelFormat::Bgra8, width as i32, height as i32)?;
-
-        // ピクセルデータを InMemoryRandomAccessStream 経由で書き込む
-        {
-            let stream = InMemoryRandomAccessStream::new()?;
-            let writer = DataWriter::CreateDataWriter(&stream)?;
-            writer.WriteBytes(bgra_data)?;
-            writer.StoreAsync()?.get()?;
-            writer.FlushAsync()?.get()?;
-        }
 
         // SoftwareBitmap のロック＆コピー（直接バッファアクセス）
         {
@@ -69,22 +61,17 @@ mod windows_impl {
         let engine = if let Some(lang_code) = lang {
             let language = Language::CreateLanguage(&windows::core::HSTRING::from(lang_code))?;
             if OcrEngine::IsLanguageSupported(&language)? {
-                OcrEngine::TryCreateFromLanguage(&language)?.ok_or_else(|| {
-                    anyhow::anyhow!("OcrEngine creation failed for lang: {lang_code}")
-                })?
+                OcrEngine::TryCreateFromLanguage(&language)?
             } else {
                 OcrEngine::TryCreateFromUserProfileLanguages()?
-                    .ok_or_else(|| anyhow::anyhow!("OcrEngine not available"))?
             }
         } else {
-            // ja-JP を試みる、だめなら en-US、それもだめならユーザー既定
+            // ja-JP を試みる、だめならユーザー既定
             let ja = Language::CreateLanguage(&windows::core::HSTRING::from("ja-JP"))?;
             if OcrEngine::IsLanguageSupported(&ja)? {
                 OcrEngine::TryCreateFromLanguage(&ja)?
-                    .ok_or_else(|| anyhow::anyhow!("OcrEngine creation failed"))?
             } else {
                 OcrEngine::TryCreateFromUserProfileLanguages()?
-                    .ok_or_else(|| anyhow::anyhow!("OcrEngine not available"))?
             }
         };
 
@@ -171,9 +158,6 @@ mod windows_impl {
 
     /// ファイルパス (PNG/BMP) から OCR を実行する（テスト・デバッグ用）
     pub fn ocr_from_file(path: &str, lang: Option<&str>) -> Result<OcrText> {
-        use std::fs;
-        // PNG/BMP → BGRA8 への変換は image クレートを使わず
-        // StorageFile + BitmapDecoder を使う
         use windows::{
             core::HSTRING,
             Graphics::Imaging::BitmapDecoder,
@@ -192,21 +176,16 @@ mod windows_impl {
 
         let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;
 
-        // BGRA8 に変換
-        let bgra_bitmap = SoftwareBitmap::Convert(
-            &software_bitmap,
-            BitmapPixelFormat::Bgra8,
-            BitmapAlphaMode::Premultiplied,
-        )?;
+        // BGRA8 に変換 (windows-rs 0.58: Convert は 2 引数)
+        let bgra_bitmap = SoftwareBitmap::Convert(&software_bitmap, BitmapPixelFormat::Bgra8)?;
 
         let width = bgra_bitmap.PixelWidth()? as u32;
         let height = bgra_bitmap.PixelHeight()? as u32;
+        let _ = (width, height); // suppress warning
 
-        // バイト列取得
         let engine = build_engine(lang)?;
         let result = engine.RecognizeAsync(&bgra_bitmap)?.get()?;
         let text = result.Text()?.to_string();
-        let _ = (width, height); // suppress warning
 
         Ok(OcrText {
             text,
@@ -218,17 +197,14 @@ mod windows_impl {
         if let Some(lang_code) = lang {
             let language = Language::CreateLanguage(&windows::core::HSTRING::from(lang_code))?;
             if OcrEngine::IsLanguageSupported(&language)? {
-                return Ok(OcrEngine::TryCreateFromLanguage(&language)?
-                    .ok_or_else(|| anyhow::anyhow!("OcrEngine creation failed"))?);
+                return Ok(OcrEngine::TryCreateFromLanguage(&language)?);
             }
         }
         let ja = Language::CreateLanguage(&windows::core::HSTRING::from("ja-JP"))?;
         if OcrEngine::IsLanguageSupported(&ja)? {
-            return Ok(OcrEngine::TryCreateFromLanguage(&ja)?
-                .ok_or_else(|| anyhow::anyhow!("OcrEngine creation failed"))?);
+            return Ok(OcrEngine::TryCreateFromLanguage(&ja)?);
         }
-        OcrEngine::TryCreateFromUserProfileLanguages()?
-            .ok_or_else(|| anyhow::anyhow!("OcrEngine not available"))
+        Ok(OcrEngine::TryCreateFromUserProfileLanguages()?)
     }
 }
 

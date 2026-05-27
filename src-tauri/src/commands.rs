@@ -1,7 +1,7 @@
 /// IkaVision XP — Tauri コマンド定義
 
 use tauri::{AppHandle, State};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
@@ -127,7 +127,7 @@ pub async fn update_tags(id: String, tags: Vec<String>) -> Result<(), String> {
 
 /// メモを更新する
 #[tauri::command]
-pub async fn update_note(id: String, note: String) -> Result<(), String> {
+pub async fn update_note(id: String, _note: String) -> Result<(), String> {
     log::info!("[commands] update_note: id={id}");
     Ok(())
 }
