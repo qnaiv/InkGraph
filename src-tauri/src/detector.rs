@@ -1,26 +1,41 @@
-use crate::{
-    capture::CapturedFrame,
-    ocr::ocr_from_bgra,
-};
-use anyhow::Result;
 /// IkaVision XP — リザルト検知モジュール
 ///
 /// キャプチャフレームの ROI(WIN/LOSE 領域)に OCR をかけ、
 /// リザルト画面を検知するロジックです。
 /// 同一試合の重複検知を防ぐデバウンスも実装します。
+
+use crate::{
+    capture::CapturedFrame,
+    ocr::ocr_from_bgra,
+};
+use anyhow::Result;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
-// ROI 定義 (1920×1080 基準)
+// ROI 定義
 // ---------------------------------------------------------------------------
+//
+// 全座標は 16:9 フレームに対する比率で定義します。
+// スプラトゥーン3 リザルト画面のスクリーンショット実測値 (2026-05-27)。
+// 解像度が変わっても to_pixels() が自動スケールします。
+//
+// 測定画像: バンカラマッチ(オープン) 1456×816 スクショ
+// Xマッチでも WIN!/LOSE... バナーは同位置に表示されます。
 
-/// WIN/LOSE テキストが表示される領域
-/// スプラトゥーン3 リザルト画面の中央上部
-const RESULT_ROI: Roi = Roi {
-    x_ratio: 0.395,
-    y_ratio: 0.370,
-    w_ratio: 0.210,
-    h_ratio: 0.093,
+/// WIN! バナー (ピンク帯) の領域
+const WIN_ROI: Roi = Roi {
+    x_ratio: 0.455,
+    y_ratio: 0.267,
+    w_ratio: 0.190,
+    h_ratio: 0.065,
+};
+
+/// LOSE... バナー (緑帯) の領域
+const LOSE_ROI: Roi = Roi {
+    x_ratio: 0.455,
+    y_ratio: 0.620,
+    w_ratio: 0.190,
+    h_ratio: 0.065,
 };
 
 /// ROI を相対比率で定義する構造体
@@ -54,7 +69,7 @@ impl Roi {
 /// リザルト検知の状態を保持する
 pub struct ResultDetector {
     last_detected_at: Option<Instant>,
-    /// 同一試合を重複検知しないクールダウン
+    /// 同一試合を重複検知しないクールダウン (秒)
     cooldown: Duration,
 }
 
@@ -75,7 +90,9 @@ impl ResultDetector {
     }
 
     /// フレームから WIN/LOSE を検知する。
-    /// クールダウン中は NotDetected を返す。
+    ///
+    /// WIN_ROI と LOSE_ROI をそれぞれ OCR して判定します。
+    /// クールダウン中は NotDetected を返します。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
         // クールダウンチェック
         if let Some(last) = self.last_detected_at {
@@ -84,33 +101,36 @@ impl ResultDetector {
             }
         }
 
-        // ROI を切り出す
-        let (x, y, w, h) = RESULT_ROI.to_pixels(frame.width, frame.height);
-        let roi_bgra = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-
-        // OCR 実行 (英語モードで WIN/LOSE を確実に取る)
-        let ocr_result = ocr_from_bgra(&roi_bgra, w, h, Some("en-US"))?;
-        let text = ocr_result.text.to_uppercase();
-
-        let detected = if text.contains("WIN") {
-            DetectionResult::Win
-        } else if text.contains("LOSE") || text.contains("LOSS") {
-            DetectionResult::Lose
-        } else {
-            DetectionResult::NotDetected
-        };
-
-        if detected != DetectionResult::NotDetected {
-            self.last_detected_at = Some(Instant::now());
-            log::info!(
-                "[detector] result detected: {:?} (text: {:?})",
-                detected,
-                text
-            );
+        // WIN バナーを確認
+        let win_text = ocr_roi(frame, &WIN_ROI, "en-US")?;
+        if win_text.contains("WIN") {
+            self.record_detection();
+            log::info!("[detector] WIN detected (text: {:?})", win_text);
+            return Ok(DetectionResult::Win);
         }
 
-        Ok(detected)
+        // LOSE バナーを確認
+        let lose_text = ocr_roi(frame, &LOSE_ROI, "en-US")?;
+        if lose_text.contains("LOSE") || lose_text.contains("LOSS") {
+            self.record_detection();
+            log::info!("[detector] LOSE detected (text: {:?})", lose_text);
+            return Ok(DetectionResult::Lose);
+        }
+
+        Ok(DetectionResult::NotDetected)
     }
+
+    fn record_detection(&mut self) {
+        self.last_detected_at = Some(Instant::now());
+    }
+}
+
+/// ROI を切り出して OCR し、大文字テキストを返す
+fn ocr_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
+    let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
+    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let result = ocr_from_bgra(&cropped, w, h, Some(lang))?;
+    Ok(result.text.to_uppercase())
 }
 
 // ---------------------------------------------------------------------------
@@ -141,35 +161,36 @@ mod tests {
 
     #[test]
     fn test_crop_bgra_basic() {
-        // 4×4 の BGRA 画像から 2×2 を切り出す
         let mut data = vec![0u8; 4 * 4 * 4];
-        // (2,2) ピクセルを赤にする
         let idx = ((2 * 4 + 2) * 4) as usize;
-        data[idx] = 0; // B
-        data[idx + 1] = 0; // G
+        data[idx] = 0;
+        data[idx + 1] = 0;
         data[idx + 2] = 255; // R
         data[idx + 3] = 255; // A
-
         let crop = crop_bgra(&data, 4, 2, 2, 2, 2);
-        assert_eq!(crop.len(), 16); // 2×2×4
-                                    // 左上ピクセル (元の(2,2)) が赤であることを確認
+        assert_eq!(crop.len(), 16);
         assert_eq!(crop[2], 255);
     }
 
     #[test]
-    fn test_roi_to_pixels() {
-        let roi = RESULT_ROI;
-        let (x, y, w, h) = roi.to_pixels(1920, 1080);
-        assert!(x < 1920);
-        assert!(y < 1080);
-        assert!(w > 0);
-        assert!(h > 0);
+    fn test_roi_to_pixels_1080p() {
+        let (x, y, w, h) = WIN_ROI.to_pixels(1920, 1080);
+        // WIN バナーは画面中央右寄りのはず
+        assert!(x > 800, "WIN ROI x={x} should be right of center");
+        assert!(y > 200, "WIN ROI y={y} should be below 1/4 height");
+        assert!(w > 0 && h > 0);
     }
 
     #[test]
-    fn test_detector_cooldown() {
-        // Windows 以外ではキャプチャが使えないため OCR テストはスキップ
-        // クールダウン後に再検知できることだけ確認
+    fn test_roi_to_pixels_816p() {
+        let (x, y, w, h) = WIN_ROI.to_pixels(1456, 816);
+        assert!(x > 600);
+        assert!(y > 180);
+        assert!(w > 0 && h > 0);
+    }
+
+    #[test]
+    fn test_detector_initial_state() {
         let det = ResultDetector::new(30);
         assert!(det.last_detected_at.is_none());
     }
