@@ -1,0 +1,41 @@
+# Dependency directories
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# SQLite DB (ユーザーデータ)
+*.db
+*.db-wal
+*.db-shm
+
+# Tauri generated files
+src-tauri/gen/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editor configs
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
