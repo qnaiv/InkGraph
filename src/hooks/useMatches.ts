@@ -42,10 +42,10 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
       // tauri-plugin-sql は JS 側で直接 SQL を実行する
       // ここではシンプルに invoke でラッパーコマンドを呼ぶ
       // 実装フェーズで tauri-plugin-sql の Database クラスに移行する
-      const result: RawMatch[] = await invoke('get_matches', {
+      const result = await invoke<RawMatch[]>('get_matches', {
         limit: 100,
         rule: ruleFilter ?? undefined,
-      }).catch(() => []);
+      }).catch(() => [] as RawMatch[]);
       setMatches(result.map(parseMatch));
     } catch (e) {
       setError(String(e));

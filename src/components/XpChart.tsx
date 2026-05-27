@@ -8,7 +8,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
 } from 'recharts';
 import { RULES, type Match, type Rule } from '../types';
 
@@ -62,7 +61,7 @@ function CustomDot(props: any) {
   );
 }
 
-function CustomTooltip({ active, payload, label }: any) {
+function CustomTooltip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as ChartDataPoint;
   return (
