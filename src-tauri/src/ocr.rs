@@ -165,9 +165,13 @@ mod windows_impl {
 
         let abs_path = std::fs::canonicalize(path)
             .map_err(|e| anyhow::anyhow!("file not found: {path}: {e}"))?;
-        let path_str = abs_path
+        let path_str_raw = abs_path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid path"))?;
+        // std::fs::canonicalize on Windows returns an extended-length path
+        // ("\\?\C:\...") which StorageFile::GetFileFromPathAsync rejects.
+        // Strip the prefix to get a plain Win32 path.
+        let path_str = path_str_raw.strip_prefix(r"\\?\").unwrap_or(path_str_raw);
 
         let file = StorageFile::GetFileFromPathAsync(&HSTRING::from(path_str))?.get()?;
         let stream = file.OpenAsync(FileAccessMode::Read)?.get()?;
