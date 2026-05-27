@@ -1,126 +1,109 @@
-# IkaVision XP — 開発環境セットアップスクリプト
-# 使い方: PowerShell を「管理者として実行」して以下を実行
-#   Set-ExecutionPolicy Bypass -Scope Process -Force
-#   .\setup.ps1
+# IkaVision XP - Dev environment setup
+# Run as Administrator:
+#   Set-ExecutionPolicy Bypass -Scope Process -Force; .\setup.ps1
 
 $ErrorActionPreference = "Stop"
 
-function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
-function Write-Ok($msg)   { Write-Host "  ✓ $msg"  -ForegroundColor Green }
-function Write-Skip($msg) { Write-Host "  - $msg (スキップ)" -ForegroundColor DarkGray }
+function Step  { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
+function Ok    { param($m) Write-Host "  [OK]   $m" -ForegroundColor Green }
+function Skip  { param($m) Write-Host "  [SKIP] $m (already installed)" -ForegroundColor DarkGray }
+function Fail  { param($m) Write-Host "  [ERR]  $m" -ForegroundColor Red; exit 1 }
 
-Write-Host @"
+Write-Host ""
+Write-Host "  IkaVision XP - Setup" -ForegroundColor White
+Write-Host "  Installing: Rust, Node.js, VS Build Tools, WebView2" -ForegroundColor DarkGray
+Write-Host ""
 
-  🦑  IkaVision XP — セットアップ開始
-  ──────────────────────────────────────
-  所要時間: 約 10〜20 分 (回線速度による)
-  インストール内容:
-    • Rust + cargo
-    • Node.js 20 LTS
-    • Visual Studio C++ Build Tools
-    • WebView2 Runtime
-
-"@ -ForegroundColor White
-
-# ──────────────────────────────────────────────────────────────
-# 1. winget の存在確認
-# ──────────────────────────────────────────────────────────────
-Write-Step "winget を確認中..."
+# ------------------------------------------------------------------
+# 1. winget check
+# ------------------------------------------------------------------
+Step "Checking winget..."
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-    Write-Host "  winget が見つかりません。" -ForegroundColor Red
-    Write-Host "  Microsoft Store から 'アプリ インストーラー' を更新してください。" -ForegroundColor Yellow
-    Write-Host "  URL: https://aka.ms/getwinget"
-    exit 1
+    Fail "winget not found. Update 'App Installer' from Microsoft Store: https://aka.ms/getwinget"
 }
-Write-Ok "winget OK"
+Ok "winget found"
 
-# ──────────────────────────────────────────────────────────────
-# 2. Rust (rustup)
-# ──────────────────────────────────────────────────────────────
-Write-Step "Rust を確認中..."
-if (Get-Command cargo -ErrorAction SilentlyContinue) {
-    $v = cargo --version
-    Write-Skip "cargo 既にインストール済み ($v)"
+# ------------------------------------------------------------------
+# 2. Rust
+# ------------------------------------------------------------------
+Step "Checking Rust..."
+$cargoPath = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+if ((Get-Command cargo -ErrorAction SilentlyContinue) -or (Test-Path $cargoPath)) {
+    Skip "Rust / cargo"
 } else {
-    Write-Host "  Rust をインストール中..." -ForegroundColor Yellow
+    Write-Host "  Installing Rust..." -ForegroundColor Yellow
     winget install --id Rustlang.Rustup -e --accept-package-agreements --accept-source-agreements
-    # PATH を現セッションに反映
-    $env:PATH += ";$env:USERPROFILE\.cargo\bin"
-    Write-Ok "Rust インストール完了"
+    $env:PATH = $env:PATH + ";" + (Join-Path $env:USERPROFILE ".cargo\bin")
+    Ok "Rust installed"
 }
 
-# ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
 # 3. Node.js
-# ──────────────────────────────────────────────────────────────
-Write-Step "Node.js を確認中..."
+# ------------------------------------------------------------------
+Step "Checking Node.js..."
 if (Get-Command node -ErrorAction SilentlyContinue) {
-    $v = node --version
-    Write-Skip "Node.js 既にインストール済み ($v)"
+    Skip "Node.js $(node --version)"
 } else {
-    Write-Host "  Node.js 20 LTS をインストール中..." -ForegroundColor Yellow
+    Write-Host "  Installing Node.js LTS..." -ForegroundColor Yellow
     winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
-    # PATH を現セッションに反映
-    $env:PATH += ";$env:PROGRAMFILES\nodejs"
-    Write-Ok "Node.js インストール完了"
+    # Refresh PATH from registry
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH    = $machinePath + ";" + $userPath
+    Ok "Node.js installed"
 }
 
-# ──────────────────────────────────────────────────────────────
-# 4. Visual Studio Build Tools (C++ コンパイラ)
-# ──────────────────────────────────────────────────────────────
-Write-Step "C++ Build Tools を確認中..."
-$vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$hasCpp = $false
+# ------------------------------------------------------------------
+# 4. Visual Studio C++ Build Tools
+# ------------------------------------------------------------------
+Step "Checking C++ Build Tools..."
+$vsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$hasCpp  = $false
 if (Test-Path $vsWhere) {
-    $installs = & $vsWhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json 2>$null | ConvertFrom-Json
-    if ($installs.Count -gt 0) { $hasCpp = $true }
+    $result = & $vsWhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 2>$null
+    if ($result) { $hasCpp = $true }
 }
 if ($hasCpp) {
-    Write-Skip "C++ Build Tools 既にインストール済み"
+    Skip "C++ Build Tools"
 } else {
-    Write-Host "  Visual Studio Build Tools 2022 をインストール中..." -ForegroundColor Yellow
-    Write-Host "  (C++ ワークロード込み、約 4GB)" -ForegroundColor DarkGray
+    Write-Host "  Installing VS Build Tools 2022 (C++ workload, ~4GB)..." -ForegroundColor Yellow
+    $override = "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
     winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
-        --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" `
+        --override $override `
         --accept-package-agreements --accept-source-agreements
-    Write-Ok "C++ Build Tools インストール完了"
+    Ok "C++ Build Tools installed"
 }
 
-# ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
 # 5. WebView2 Runtime
-# ──────────────────────────────────────────────────────────────
-Write-Step "WebView2 を確認中..."
-$wv2 = Get-Package -Name "Microsoft Edge WebView2 Runtime" -ErrorAction SilentlyContinue
-if ($wv2) {
-    Write-Skip "WebView2 既にインストール済み"
+# ------------------------------------------------------------------
+Step "Checking WebView2..."
+$wv2Key = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+if (Test-Path $wv2Key) {
+    Skip "WebView2 Runtime"
 } else {
-    Write-Host "  WebView2 Runtime をインストール中..." -ForegroundColor Yellow
+    Write-Host "  Installing WebView2 Runtime..." -ForegroundColor Yellow
     winget install --id Microsoft.EdgeWebView2Runtime -e --accept-package-agreements --accept-source-agreements
-    Write-Ok "WebView2 インストール完了"
+    Ok "WebView2 installed"
 }
 
-# ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
 # 6. npm install
-# ──────────────────────────────────────────────────────────────
-Write-Step "npm パッケージをインストール中..."
+# ------------------------------------------------------------------
+Step "Running npm install..."
 npm install
-Write-Ok "npm install 完了"
+Ok "npm install done"
 
-# ──────────────────────────────────────────────────────────────
-# 完了メッセージ
-# ──────────────────────────────────────────────────────────────
-Write-Host @"
-
-  ✅  セットアップ完了！
-  ──────────────────────────────────────
-  次のステップ:
-
-  1. ターミナルを一度閉じて開き直す（PATH 反映のため）
-
-  2. 開発サーバー起動:
-       npm run tauri:dev
-
-  3. 初回ビルドは 5〜10 分かかります。
-     ウィンドウが開いたら右下の OCR デバッグパネルで
-     スプラトゥーン3のリザルト画像を読み込んでみてください。
-
-"@ -ForegroundColor Green
+# ------------------------------------------------------------------
+# Done
+# ------------------------------------------------------------------
+Write-Host ""
+Write-Host "  Setup complete!" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Next steps:" -ForegroundColor White
+Write-Host "    1. Close this terminal and open a new one (to reload PATH)"
+Write-Host "    2. Run:  npm run tauri:dev"
+Write-Host "    3. First build takes 5-10 min. When the window opens,"
+Write-Host "       use the OCR Debug Panel (bottom-right) to test with"
+Write-Host "       a Splatoon 3 result screen screenshot."
+Write-Host ""
