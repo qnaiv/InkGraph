@@ -1,7 +1,7 @@
 // IkaVision XP — ブキ選択 UI
 
 import { useState, useMemo } from 'react';
-import { WEAPONS, getRecentWeapons, pushRecentWeapon, Weapon } from '../assets/weapons';
+import { WEAPONS, getRecentWeapons, pushRecentWeapon, type Weapon } from '../assets/weapons';
 
 interface WeaponPickerProps {
   currentWeapon: string | null;
