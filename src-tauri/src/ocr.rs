@@ -20,7 +20,6 @@ mod windows_impl {
         Globalization::Language,
         Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap},
         Media::Ocr::OcrEngine,
-        Storage::Streams::{DataWriter, InMemoryRandomAccessStream},
     };
 
     /// BGRA8 生バイト列から OCR テキストを抽出する。

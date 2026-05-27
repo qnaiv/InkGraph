@@ -17,7 +17,7 @@ pub use windows_impl::*;
 mod windows_impl {
     use super::*;
     use windows::{
-        core::{Interface, HSTRING},
+        core::Interface,
         Win32::{
             Foundation::{BOOL, HWND, LPARAM},
             UI::WindowsAndMessaging::{
@@ -82,7 +82,7 @@ mod windows_impl {
         use windows::{
             Graphics::{
                 Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem},
-                DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
+                DirectX::DirectXPixelFormat,
             },
             Win32::{
                 Foundation::HWND,

@@ -62,10 +62,11 @@ pub async fn run(app: AppHandle, state: AppState, window_title: String) {
 #[cfg(target_os = "windows")]
 async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str) {
     use crate::{
-        capture::{capture_window_frame, list_capturable_windows},
+        capture::capture_window_frame,
+        db::new_match_from_ocr,
         detector::{DetectionResult, ResultDetector},
         extractor::extract_match_data,
-        db::new_match_from_ocr,
+        types::MatchDetectedPayload,
     };
 
     // 対象ウィンドウの HWND を解決
