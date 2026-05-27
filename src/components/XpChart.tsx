@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { Match, RULES, Rule } from '../types';
+import { RULES, type Match, type Rule } from '../types';
 
 interface XpChartProps {
   matches: Match[];

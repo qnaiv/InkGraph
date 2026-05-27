@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { OcrTestResult } from '../types';
+import type { OcrTestResult } from '../types';
 
 export function OcrDebugPanel() {
   const [imagePath, setImagePath] = useState('');

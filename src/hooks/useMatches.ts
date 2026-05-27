@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { Match, MatchDetectedPayload, RawMatch, Rule } from '../types';
+import type { Match, MatchDetectedPayload, RawMatch, Rule } from '../types';
 
 /** DB から取得した生データをフロントエンド型に変換 */
 function parseMatch(raw: RawMatch): Match {

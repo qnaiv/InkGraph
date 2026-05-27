@@ -1,7 +1,7 @@
 // IkaVision XP — 試合カード
 
 import { useState } from 'react';
-import { Match } from '../types';
+import type { Match } from '../types';
 import { WeaponPicker } from './WeaponPicker';
 import { TagInput } from './TagInput';
 

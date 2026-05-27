@@ -1,6 +1,6 @@
 // IkaVision XP — 直近の試合リスト
 
-import { Match } from '../types';
+import type { Match } from '../types';
 import { MatchCard } from './MatchCard';
 
 interface MatchListProps {

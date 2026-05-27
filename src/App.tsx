@@ -6,7 +6,7 @@ import { XpChart } from './components/XpChart';
 import { MatchList } from './components/MatchList';
 import { OcrDebugPanel } from './components/OcrDebugPanel';
 import { useMatches } from './hooks/useMatches';
-import { Rule } from './types';
+import type { Rule } from './types';
 import './App.css';
 
 export default function App() {
