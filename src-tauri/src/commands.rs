@@ -1,7 +1,6 @@
 /// IkaVision XP — Tauri コマンド定義
 
 use tauri::{AppHandle, State};
-use serde::Deserialize;
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
@@ -14,7 +13,7 @@ use crate::{
 
 /// 画像ファイルから OCR を実行するテストコマンド
 ///
-/// フロントエンドから invoke("test_ocr", { image_path: "C:/..." }) で呼び出す
+/// フロントエンドから invoke("test_ocr", { imagePath: "C:/..." }) で呼び出す
 #[tauri::command]
 pub async fn test_ocr(image_path: String) -> Result<OcrTestResult, String> {
     let result = ocr_from_file(&image_path, None)
@@ -70,7 +69,6 @@ pub async fn start_capture(
 
     log::info!("[commands] start_capture: window_title={window_title}");
 
-    // キャプチャループを別タスクで起動
     let state_clone = state.inner().clone();
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -86,48 +84,5 @@ pub async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     let mut capturing = state.is_capturing.lock().await;
     *capturing = false;
     log::info!("[commands] stop_capture");
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// 試合データ CRUD コマンド
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct GetMatchesParams {
-    pub limit: Option<u32>,
-    pub rule: Option<String>,
-}
-
-/// 試合一覧を取得する
-///
-/// DB 操作は tauri-plugin-sql が JS 側で担うため、ここでは SQL 文字列を返す
-/// (フロントエンドが直接 SQLite を呼ぶ設計)
-#[tauri::command]
-pub async fn get_xp_history(rule: Option<String>) -> Result<String, String> {
-    Ok(crate::db::select_xp_history_sql(rule.is_some()))
-}
-
-/// ブキを更新する
-#[tauri::command]
-pub async fn update_weapon(id: String, weapon: String) -> Result<(), String> {
-    log::info!("[commands] update_weapon: id={id}, weapon={weapon}");
-    // 実際の DB 更新は フロントエンドの tauri-plugin-sql 経由で行う
-    Ok(())
-}
-
-/// タグを更新する
-#[tauri::command]
-pub async fn update_tags(id: String, tags: Vec<String>) -> Result<(), String> {
-    let tags_json = serde_json::to_string(&tags)
-        .map_err(|e| format!("JSON serialize failed: {e}"))?;
-    log::info!("[commands] update_tags: id={id}, tags={tags_json}");
-    Ok(())
-}
-
-/// メモを更新する
-#[tauri::command]
-pub async fn update_note(id: String, _note: String) -> Result<(), String> {
-    log::info!("[commands] update_note: id={id}");
     Ok(())
 }

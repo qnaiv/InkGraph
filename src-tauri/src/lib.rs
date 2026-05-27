@@ -12,14 +12,10 @@ pub mod types;
 
 use state::AppState;
 use commands::{
-    get_xp_history,
     list_windows,
     start_capture,
     stop_capture,
     test_ocr,
-    update_note,
-    update_tags,
-    update_weapon,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -52,10 +48,6 @@ pub fn run() {
             list_windows,
             start_capture,
             stop_capture,
-            get_xp_history,
-            update_weapon,
-            update_tags,
-            update_note,
         ])
         .run(tauri::generate_context!())
         .expect("error while running IkaVision XP");
