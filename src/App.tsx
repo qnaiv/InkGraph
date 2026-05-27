@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Header } from './components/Header';
 import { XpChart } from './components/XpChart';
 import { MatchList } from './components/MatchList';
+import { OcrDebugPanel } from './components/OcrDebugPanel';
 import { useMatches } from './hooks/useMatches';
 import { Rule } from './types';
 import './App.css';
@@ -62,6 +63,9 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      {/* 開発モード専用: OCR デバッグパネル (Issue #2 確認用) */}
+      {import.meta.env.DEV && <OcrDebugPanel />}
     </div>
   );
 }
