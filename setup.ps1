@@ -55,23 +55,26 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 
 # ------------------------------------------------------------------
 # 4. Visual Studio C++ Build Tools
+# Check by looking for link.exe directly, which is what Rust needs.
 # ------------------------------------------------------------------
-Step "Checking C++ Build Tools..."
-$vsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-$hasCpp  = $false
-if (Test-Path $vsWhere) {
-    $result = & $vsWhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 2>$null
-    if ($result) { $hasCpp = $true }
-}
-if ($hasCpp) {
-    Skip "C++ Build Tools"
+Step "Checking C++ Build Tools (link.exe)..."
+
+# Search common MSVC linker locations
+$linkExe = Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio" `
+    -Filter "link.exe" -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "Hostx64\\x64" } |
+    Select-Object -First 1
+
+if ($linkExe) {
+    Skip "C++ Build Tools (found: $($linkExe.FullName))"
 } else {
     Write-Host "  Installing VS Build Tools 2022 (C++ workload, ~4GB)..." -ForegroundColor Yellow
+    Write-Host "  This takes 10-20 minutes. Please wait..." -ForegroundColor DarkGray
     $override = "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
     winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
         --override $override `
         --accept-package-agreements --accept-source-agreements
-    Ok "C++ Build Tools installed"
+    Ok "C++ Build Tools installed - please restart your terminal before building"
 }
 
 # ------------------------------------------------------------------
