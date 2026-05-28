@@ -531,3 +531,359 @@ mod tests {
         assert!(started.arrow_y_ratio().is_none());
     }
 }
+
+// ===========================================================================
+// YOLO/ONNX 推論エンジン
+// ===========================================================================
+//
+// 使用モデル: YOLOv8 Nano (ユーザーが学習・配置)
+// モデルパス: <app_dir>/assets/models/yolo_result.onnx
+//
+// 前提:
+//   - ort 2.x (load-dynamic): onnxruntime.dll が実行時に PATH 上にあること
+//   - モデルはリザルト画面用クラスで学習済みであること
+//   - 推論は ResultDetector が ResultScreen 状態に遷移したときのみ呼び出す
+//
+// 座標系:
+//   Detection.bbox は元フレームに対する正規化座標 [0, 1]。
+//   capture_loop で frame.width / frame.height を掛けてピクセル座標へ変換する。
+
+use crate::preprocess::{letterbox_bgra, LetterboxParams};
+use ndarray::Array4;
+use ort::{GraphOptimizationLevel, Session};
+use std::path::PathBuf;
+
+// ---------------------------------------------------------------------------
+// クラス定義
+// ---------------------------------------------------------------------------
+
+/// YOLO モデルが検出するクラス (yolo_result.onnx の学習クラス順と一致させること)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(usize)]
+pub enum YoloClass {
+    ResultWin   = 0, // WIN! パネル全体
+    ResultLose  = 1, // LOSE! パネル全体
+    RuleText    = 2, // ルール名テキスト (ガチエリア等)
+    StageText   = 3, // ステージ名テキスト
+    PlayerKda   = 4, // 自分のプレイヤー行 (K/D/SP を含む行)
+    ModeText    = 5, // モード名 (Xマッチ / バンカラ等)
+}
+
+impl YoloClass {
+    pub fn from_id(id: usize) -> Option<Self> {
+        match id {
+            0 => Some(Self::ResultWin),
+            1 => Some(Self::ResultLose),
+            2 => Some(Self::RuleText),
+            3 => Some(Self::StageText),
+            4 => Some(Self::PlayerKda),
+            5 => Some(Self::ModeText),
+            _ => None,
+        }
+    }
+
+    pub fn num_classes() -> usize { 6 }
+}
+
+// ---------------------------------------------------------------------------
+// 検出結果構造体
+// ---------------------------------------------------------------------------
+
+/// YOLOv8 の 1検出エントリ
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BBox {
+    /// 左端 (正規化 [0,1])
+    pub x1: f32,
+    /// 上端 (正規化 [0,1])
+    pub y1: f32,
+    /// 右端 (正規化 [0,1])
+    pub x2: f32,
+    /// 下端 (正規化 [0,1])
+    pub y2: f32,
+}
+
+impl BBox {
+    pub fn width(&self)  -> f32 { self.x2 - self.x1 }
+    pub fn height(&self) -> f32 { self.y2 - self.y1 }
+
+    /// IoU (Intersection over Union)
+    pub fn iou(&self, other: &BBox) -> f32 {
+        let ix1 = self.x1.max(other.x1);
+        let iy1 = self.y1.max(other.y1);
+        let ix2 = self.x2.min(other.x2);
+        let iy2 = self.y2.min(other.y2);
+        let inter = (ix2 - ix1).max(0.0) * (iy2 - iy1).max(0.0);
+        let union = self.width() * self.height() + other.width() * other.height() - inter;
+        if union <= 0.0 { 0.0 } else { inter / union }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Detection {
+    pub bbox:       BBox,
+    pub class_id:   usize,
+    pub class_name: String,
+    pub confidence: f32,
+}
+
+// ---------------------------------------------------------------------------
+// YoloDetector
+// ---------------------------------------------------------------------------
+
+/// YOLO セッションの ONNX 入力サイズ (正方形)
+const YOLO_INPUT_SIZE: u32 = 640;
+
+/// 確信度の下限。これ未満の検出はノイズとして破棄する
+const DEFAULT_CONF_THRESHOLD: f32 = 0.70;
+
+/// NMS の IoU 閾値
+const DEFAULT_IOU_THRESHOLD: f32 = 0.45;
+
+pub struct YoloDetector {
+    session:        Option<Session>,
+    model_path:     PathBuf,
+    conf_threshold: f32,
+    iou_threshold:  f32,
+}
+
+impl YoloDetector {
+    /// `model_path`: `assets/models/yolo_result.onnx` への絶対パスを渡すこと。
+    pub fn new(model_path: impl Into<PathBuf>) -> Self {
+        Self {
+            session:        None,
+            model_path:     model_path.into(),
+            conf_threshold: DEFAULT_CONF_THRESHOLD,
+            iou_threshold:  DEFAULT_IOU_THRESHOLD,
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool { self.session.is_some() }
+
+    /// モデルをロードし ort セッションを初期化する。
+    /// `load-dynamic` feature では、onnxruntime.dll が
+    /// PATH または実行ファイルと同ディレクトリにある必要がある。
+    pub fn load(&mut self) -> Result<()> {
+        if !self.model_path.exists() {
+            anyhow::bail!(
+                "YOLO model not found: {}  (place yolo_result.onnx here)",
+                self.model_path.display()
+            );
+        }
+
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(&self.model_path)?;
+
+        log::info!("[yolo] model loaded: {}", self.model_path.display());
+        self.session = Some(session);
+        Ok(())
+    }
+
+    /// フレームに対して推論を実行し、確信度閾値を超えた `Detection` 一覧を返す。
+    ///
+    /// モデル未ロード時は即座に `Ok(vec![])` を返す (ロード前の呼び出しを安全に無視)。
+    pub fn detect(&self, frame: &CapturedFrame) -> Result<Vec<Detection>> {
+        let session = match &self.session {
+            Some(s) => s,
+            None    => return Ok(vec![]),
+        };
+
+        // 1. 前処理: BGRA → レターボックスリサイズ → CHW f32 テンソル
+        let (chw, params) = letterbox_bgra(
+            &frame.bgra, frame.width, frame.height, YOLO_INPUT_SIZE,
+        )?;
+
+        // ndarray: [1, 3, 640, 640]
+        let input = Array4::from_shape_vec(
+            (1, 3, YOLO_INPUT_SIZE as usize, YOLO_INPUT_SIZE as usize),
+            chw,
+        )?;
+
+        // 2. 推論実行
+        let outputs = session.run(ort::inputs!["images" => input.view()]?)?;
+
+        // 3. 出力パース
+        // YOLOv8 output shape: [1, 4+num_classes, 8400]
+        let output_tensor = outputs["output0"].extract_tensor::<f32>()?;
+        let view = output_tensor.view();
+
+        let num_classes  = YoloClass::num_classes();
+        let num_anchors  = view.shape()[2]; // 8400
+
+        let mut raw_detections: Vec<Detection> = Vec::new();
+
+        for anchor_idx in 0..num_anchors {
+            // cx, cy, w, h (in YOLO input pixel space)
+            let cx = view[[0, 0, anchor_idx]];
+            let cy = view[[0, 1, anchor_idx]];
+            let bw = view[[0, 2, anchor_idx]];
+            let bh = view[[0, 3, anchor_idx]];
+
+            // クラス確信度の最大値とそのクラス id を探す
+            let mut max_conf   = 0f32;
+            let mut max_class  = 0usize;
+            for c in 0..num_classes {
+                let score = view[[0, 4 + c, anchor_idx]];
+                if score > max_conf {
+                    max_conf  = score;
+                    max_class = c;
+                }
+            }
+
+            if max_conf < self.conf_threshold { continue; }
+
+            // 座標を元フレームの正規化座標へ変換
+            let (x1, y1, x2, y2) = params.to_normalized(cx, cy, bw, bh);
+
+            raw_detections.push(Detection {
+                bbox: BBox { x1, y1, x2, y2 },
+                class_id:   max_class,
+                class_name: format!("{:?}", YoloClass::from_id(max_class)
+                    .unwrap_or(YoloClass::ResultWin)),
+                confidence: max_conf,
+            });
+        }
+
+        // 4. クラスごとに NMS を適用
+        let detections = nms_per_class(raw_detections, self.iou_threshold);
+
+        log::debug!(
+            "[yolo] detect: {} detections (conf>{:.2})",
+            detections.len(), self.conf_threshold
+        );
+        Ok(detections)
+    }
+
+    /// 特定クラスの最高確信度検出を 1件返す便利メソッド。
+    pub fn best_detection<'a>(
+        detections: &'a [Detection],
+        class: YoloClass,
+    ) -> Option<&'a Detection> {
+        detections
+            .iter()
+            .filter(|d| d.class_id == class as usize)
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NMS (Non-Maximum Suppression) — クラスごと独立適用
+// ---------------------------------------------------------------------------
+
+fn nms_per_class(detections: Vec<Detection>, iou_threshold: f32) -> Vec<Detection> {
+    let max_class = detections.iter().map(|d| d.class_id).max().unwrap_or(0);
+    let mut result: Vec<Detection> = Vec::new();
+
+    for class_id in 0..=max_class {
+        let mut class_dets: Vec<&Detection> = detections
+            .iter()
+            .filter(|d| d.class_id == class_id)
+            .collect();
+
+        // 確信度の降順にソート
+        class_dets.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+
+        let mut kept: Vec<BBox> = Vec::new();
+        for det in class_dets {
+            // kept の各 BBox と IoU を比較; 重複していれば破棄
+            let overlaps = kept.iter().any(|k| det.bbox.iou(k) > iou_threshold);
+            if !overlaps {
+                kept.push(BBox {
+                    x1: det.bbox.x1,
+                    y1: det.bbox.y1,
+                    x2: det.bbox.x2,
+                    y2: det.bbox.y2,
+                });
+                result.push(Detection {
+                    bbox:       BBox { x1: det.bbox.x1, y1: det.bbox.y1, x2: det.bbox.x2, y2: det.bbox.y2 },
+                    class_id:   det.class_id,
+                    class_name: det.class_name.clone(),
+                    confidence: det.confidence,
+                });
+            }
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// YoloDetector テスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod yolo_tests {
+    use super::*;
+
+    #[test]
+    fn test_bbox_iou_identical() {
+        let b = BBox { x1: 0.1, y1: 0.1, x2: 0.5, y2: 0.5 };
+        assert!((b.iou(&b) - 1.0).abs() < 1e-5, "IoU of identical bbox should be 1.0");
+    }
+
+    #[test]
+    fn test_bbox_iou_no_overlap() {
+        let a = BBox { x1: 0.0, y1: 0.0, x2: 0.2, y2: 0.2 };
+        let b = BBox { x1: 0.8, y1: 0.8, x2: 1.0, y2: 1.0 };
+        assert_eq!(a.iou(&b), 0.0, "non-overlapping boxes should have IoU=0");
+    }
+
+    #[test]
+    fn test_yolo_class_num() {
+        assert_eq!(YoloClass::num_classes(), 6);
+    }
+
+    #[test]
+    fn test_yolo_class_from_id() {
+        assert_eq!(YoloClass::from_id(0), Some(YoloClass::ResultWin));
+        assert_eq!(YoloClass::from_id(4), Some(YoloClass::PlayerKda));
+        assert!(YoloClass::from_id(99).is_none());
+    }
+
+    #[test]
+    fn test_yolo_detector_not_loaded_returns_empty() {
+        let detector = YoloDetector::new("/nonexistent/path/model.onnx");
+        assert!(!detector.is_loaded());
+        let frame = crate::capture::CapturedFrame {
+            bgra: vec![0u8; 4 * 4 * 4],
+            width: 4,
+            height: 4,
+        };
+        let result = detector.detect(&frame).unwrap();
+        assert!(result.is_empty(), "unloaded detector should return empty vec");
+    }
+
+    #[test]
+    fn test_nms_removes_duplicate() {
+        let dets = vec![
+            Detection {
+                bbox: BBox { x1: 0.1, y1: 0.1, x2: 0.5, y2: 0.5 },
+                class_id: 0, class_name: "win".to_string(), confidence: 0.95,
+            },
+            Detection {
+                // 上と完全重複、確信度が低い方
+                bbox: BBox { x1: 0.1, y1: 0.1, x2: 0.5, y2: 0.5 },
+                class_id: 0, class_name: "win".to_string(), confidence: 0.80,
+            },
+        ];
+        let kept = nms_per_class(dets, 0.45);
+        assert_eq!(kept.len(), 1, "NMS should keep only 1 of 2 identical boxes");
+        assert!((kept[0].confidence - 0.95).abs() < 1e-5, "should keep higher confidence");
+    }
+
+    #[test]
+    fn test_nms_keeps_different_classes() {
+        let dets = vec![
+            Detection {
+                bbox: BBox { x1: 0.1, y1: 0.1, x2: 0.5, y2: 0.5 },
+                class_id: 0, class_name: "win".to_string(), confidence: 0.90,
+            },
+            Detection {
+                bbox: BBox { x1: 0.1, y1: 0.1, x2: 0.5, y2: 0.5 },
+                class_id: 2, class_name: "rule".to_string(), confidence: 0.85,
+            },
+        ];
+        let kept = nms_per_class(dets, 0.45);
+        assert_eq!(kept.len(), 2, "NMS is per-class; different classes should both be kept");
+    }
+}

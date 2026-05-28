@@ -7,6 +7,8 @@ pub mod db;
 pub mod detector;
 pub mod extractor;
 pub mod ocr;
+pub mod preprocess;
+pub mod screen_state;
 pub mod state;
 pub mod types;
 

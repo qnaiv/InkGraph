@@ -1,6 +1,9 @@
 /// InkGraph — 共有型定義
 use serde::{Deserialize, Serialize};
 
+// YOLO 検出結果型を detector.rs から再エクスポート
+pub use crate::detector::{BBox, Detection, YoloClass};
+
 // ---------------------------------------------------------------------------
 // Match (試合記録)
 // ---------------------------------------------------------------------------
