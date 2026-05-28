@@ -6,6 +6,7 @@ import type { Match, MatchDetectedPayload, RawMatch, Rule } from '../types';
 import {
   selectMatches,
   insertMatch,
+  updateMatchResult,
   dbUpdateWeapon,
   dbUpdateTags,
   dbUpdateNote,
@@ -15,15 +16,10 @@ import {
 // 内部ユーティリティ
 // ---------------------------------------------------------------------------
 
-/** DB から取得した生データをフロントエンド型に変換 */
 function parseMatch(raw: RawMatch): Match {
   let tags: string[] = [];
   if (raw.tags) {
-    try {
-      tags = JSON.parse(raw.tags);
-    } catch {
-      tags = [];
-    }
+    try { tags = JSON.parse(raw.tags); } catch { tags = []; }
   }
   return { ...raw, tags };
 }
@@ -41,7 +37,6 @@ interface UseMatchesReturn {
   updateNote:   (id: string, note: string)   => Promise<void>;
 }
 
-/** 試合データを管理するカスタムフック */
 export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -61,26 +56,43 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     }
   }, [ruleFilter]);
 
-  useEffect(() => {
-    loadMatches();
-  }, [loadMatches]);
+  useEffect(() => { loadMatches(); }, [loadMatches]);
 
   // ── Rust からのリアルタイム通知を購読 ───────────────────────
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
+    const unlisteners: UnlistenFn[] = [];
 
-    listen<MatchDetectedPayload>('match_detected', async (event) => {
+    // Phase 1: バトル開始 → "in_progress" レコードを追加
+    listen<MatchDetectedPayload>('battle_started', async (event) => {
       const raw = event.payload.match_data;
-      // DB に永続化してから UI に追加
       try {
         await insertMatch(raw);
       } catch (e) {
-        console.error('[useMatches] insertMatch failed:', e);
+        console.error('[useMatches] insertMatch(in_progress) failed:', e);
       }
       setMatches((prev) => [parseMatch(raw), ...prev]);
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => unlisteners.push(fn));
 
-    return () => { unlisten?.(); };
+    // Phase 2: リザルト確定 → 既存の "in_progress" レコードを win/lose に更新
+    listen<MatchDetectedPayload>('match_detected', async (event) => {
+      const raw = event.payload.match_data;
+      try {
+        await updateMatchResult(raw);
+      } catch (e) {
+        console.error('[useMatches] updateMatchResult failed:', e);
+      }
+      setMatches((prev) => {
+        const exists = prev.some((m) => m.id === raw.id);
+        if (exists) {
+          // in_progress → win/lose にインプレース更新
+          return prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m));
+        }
+        // キャプチャ途中開始などで in_progress がない場合は先頭に追加
+        return [parseMatch(raw), ...prev];
+      });
+    }).then((fn) => unlisteners.push(fn));
+
+    return () => { unlisteners.forEach((fn) => fn()); };
   }, []);
 
   // ── 更新操作 ─────────────────────────────────────────────────

@@ -26,12 +26,12 @@ interface ChartDataPoint {
 
 function buildChartData(matches: Match[]): ChartDataPoint[] {
   return matches
-    .filter((m) => m.xp_after != null)
+    .filter((m) => m.xp_after != null && m.result !== 'in_progress')
     .sort((a, b) => a.played_at.localeCompare(b.played_at))
     .map((m, i) => ({
       label: `#${i + 1}`,
       xp: m.xp_after!,
-      result: m.result,
+      result: m.result as 'win' | 'lose',
       date: new Date(m.played_at).toLocaleString('ja-JP', {
         month: 'numeric',
         day: 'numeric',

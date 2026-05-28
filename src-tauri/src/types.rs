@@ -13,7 +13,7 @@ pub struct Match {
     pub rule: Option<String>,
     pub stage: Option<String>,
     pub weapon: Option<String>,
-    pub result: String, // "win" | "lose"
+    pub result: String, // "win" | "lose" | "in_progress"
     pub kill_count: Option<i64>,
     pub assist_count: Option<i64>,
     pub death_count: Option<i64>,
@@ -101,6 +101,8 @@ pub struct CaptureDebugResult {
     pub battle_start_found: bool,
     /// Phase 1: 暗い巻物ピクセルで検出したか
     pub dark_scroll_found: bool,
+    /// Phase 2: リザルト画面判定 — グレー行数 (8行中)
+    pub grey_rows: u32,
     /// Phase 2 参考: WIN_ROI OCR テキスト (大文字)
     pub win_roi_text: String,
     /// Phase 2 参考: WIN テキストが見つかったか
@@ -111,7 +113,7 @@ pub struct CaptureDebugResult {
     pub yellow_lose_px: u32,
     /// Phase 2: 黄色ピクセルの y 重心 (0.0–1.0)
     pub centroid_y: f32,
-    /// Phase 2: 黄色ピクセルの y スプレッド (px)
+    /// Phase 2: 黄色ピクセルの y スプレッド (参考値 px)
     pub y_spread: u32,
     /// 判定サマリー文字列
     pub detection_summary: String,

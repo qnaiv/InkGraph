@@ -46,17 +46,24 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
     <div className="border-b border-slate-700/50 last:border-0">
       {/* コンパクト行 */}
       <button
-        className="w-full flex items-center gap-1.5 px-1 py-1.5 text-left hover:bg-slate-700/30 transition-colors rounded"
-        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-1.5 px-1 py-1.5 text-left hover:bg-slate-700/30 transition-colors rounded disabled:cursor-default"
+        onClick={() => match.result !== 'in_progress' && setExpanded((v) => !v)}
+        disabled={match.result === 'in_progress'}
       >
-        {/* WIN / LOSE */}
-        <span className={`shrink-0 text-[10px] font-bold w-9 text-center py-0.5 rounded ${
-          match.result === 'win'
-            ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-            : 'bg-red-500/20 text-red-400 border border-red-500/40'
-        }`}>
-          {match.result === 'win' ? 'WIN' : 'LOSE'}
-        </span>
+        {/* WIN / LOSE / 試合中 */}
+        {match.result === 'in_progress' ? (
+          <span className="shrink-0 text-[10px] font-bold w-9 text-center py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse">
+            試合中
+          </span>
+        ) : (
+          <span className={`shrink-0 text-[10px] font-bold w-9 text-center py-0.5 rounded ${
+            match.result === 'win'
+              ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+              : 'bg-red-500/20 text-red-400 border border-red-500/40'
+          }`}>
+            {match.result === 'win' ? 'WIN' : 'LOSE'}
+          </span>
+        )}
 
         {/* 日時 */}
         <span className="shrink-0 text-[10px] text-slate-500 w-[68px]">{dateStr}</span>

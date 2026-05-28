@@ -2,25 +2,25 @@
 ///
 /// 検知方式 (2フェーズ):
 ///   Phase 1 (WaitingForBattle):
-///     「バトルを開始します！」テキストを OCR で検知 → Phase 2 へ移行
-///     ロビー・試合中など、バトル開始前の誤検知をここで排除する
-///   Phase 2 (BattleInProgress):
-///     黄色プレイヤー矢印 (▶) のピクセルスキャンで WIN/LOSE 判定 → Phase 1 へ戻る
-///     バトルが確定した後のみリザルト検知を行う
+///     「バトルを開始します！」を検知 → DB に "in_progress" レコード作成 → InGame へ
+///     検知手段: ①暗い巻物背景のピクセル判定 (高速) ②OCR フォールバック
+///
+///   Phase 2 (InGame):
+///     リザルト画面を構造的に検知 → "in_progress" レコードを win/lose に更新
+///     検知手段: ①プレイヤー行のグレー背景判定 (リザルト画面固有の構造)
+///               ②黄色矢印の重心位置で WIN/LOSE 判定
 
 use crate::{
     capture::CapturedFrame,
     ocr::{ocr_from_bgra, preprocess_bgra},
 };
 use anyhow::Result;
-use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // ROI 定義 (16:9 フレームに対する比率)
 // ---------------------------------------------------------------------------
 
 /// 「バトルを開始します！」テキスト領域
-/// 白テキストが黒い巻物背景に表示される — OCR で確実に読める
 const BATTLE_START_ROI: Roi = Roi {
     x_ratio: 0.25,
     y_ratio: 0.36,
@@ -29,7 +29,6 @@ const BATTLE_START_ROI: Roi = Roi {
 };
 
 /// WIN! バナー領域 — debug_detect_frame の診断用のみ
-/// WinRT OCR はスタイル化フォントを認識できないため detect() では使用しない
 const WIN_ROI: Roi = Roi {
     x_ratio: 0.455,
     y_ratio: 0.267,
@@ -46,16 +45,15 @@ const ARROW_Y_END:   f32 = 0.940;
 /// WIN パネルと LOSE パネルの境界 y 比率
 const PANEL_BOUNDARY_Y: f32 = 0.630;
 
-/// 黄色矢印と判定する最小ピクセル数 (リザルト画面では 350+ px)
+/// 黄色矢印と判定する最小ピクセル数
 const MIN_YELLOW_PIXELS: u32 = 100;
 
-/// バトル開始検知後のクールダウン秒数
-/// バナー画面(~15s) + ロード(~5s) + カウントダウン(~5s) ≈ 25s を超える値に設定する
-const BATTLE_START_COOLDOWN_SECS: u64 = 30;
-
-/// 黄色ピクセルの y 方向スプレッド上限 (フレーム高さに対する比率)
-/// チーム4人分の▶矢印が複数行に分散するため 30% まで許容する
-const MAX_Y_SPREAD_RATIO: f32 = 0.30;
+/// グレー行判定の輝度下限 (0–255)
+const GREY_LUMINANCE_MIN: u16 = 180;
+/// グレー行判定の彩度上限 (max_channel - min_channel)
+const GREY_SATURATION_MAX: u8 = 40;
+/// リザルト画面と判定するグレー行の最小数 (8行中)
+const RESULT_GREY_ROWS_MIN: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Roi 構造体
@@ -85,20 +83,24 @@ impl Roi {
 
 #[derive(Debug, PartialEq)]
 enum DetectorPhase {
+    /// バトル開始を待機中
     WaitingForBattle,
-    /// バトル開始を検知後、eligible_after を過ぎるまでは黄色ピクセルスキャンを行わない
-    BattleInProgress { eligible_after: Instant },
+    /// バトル中 — リザルト画面を待機中
+    InGame,
 }
 
 pub struct ResultDetector {
     phase: DetectorPhase,
 }
 
-/// 検知結果。Win/Lose には矢印の y 重心比率を持たせ、
-/// extractor がプレイヤー行を動的に特定できるようにする。
+/// 検知結果
 #[derive(Debug, Clone)]
 pub enum DetectionResult {
+    /// Phase 1: バトル開始を検知 → "in_progress" レコードを作成すること
+    BattleStarted,
+    /// Phase 2: WIN を検知 → "in_progress" レコードを "win" に更新すること
     Win  { arrow_y_ratio: f32 },
+    /// Phase 2: LOSE を検知 → "in_progress" レコードを "lose" に更新すること
     Lose { arrow_y_ratio: f32 },
     NotDetected,
 }
@@ -106,77 +108,72 @@ pub enum DetectionResult {
 impl DetectionResult {
     pub fn result_str(&self) -> Option<&'static str> {
         match self {
-            Self::Win  { .. } => Some("win"),
-            Self::Lose { .. } => Some("lose"),
-            Self::NotDetected => None,
+            Self::BattleStarted   => None,
+            Self::Win  { .. }     => Some("win"),
+            Self::Lose { .. }     => Some("lose"),
+            Self::NotDetected     => None,
         }
     }
 
     pub fn arrow_y_ratio(&self) -> Option<f32> {
         match self {
             Self::Win  { arrow_y_ratio } | Self::Lose { arrow_y_ratio } => Some(*arrow_y_ratio),
-            Self::NotDetected => None,
+            _ => None,
         }
     }
 }
 
 impl ResultDetector {
-    pub fn new(_cooldown_secs: u64) -> Self {
+    pub fn new() -> Self {
         Self { phase: DetectorPhase::WaitingForBattle }
     }
 
-    /// 2フェーズ検知。detect() は blocking OCR を含むため、
+    /// 2フェーズ検知。detect() は Phase 1 で blocking OCR を呼ぶため、
     /// 呼び出し元は tokio::task::block_in_place でラップすること。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
-        // BattleInProgress のクールダウン中は即リターン (バトル開始画面の黄色を無視するため)
-        if let DetectorPhase::BattleInProgress { eligible_after } = &self.phase {
-            if Instant::now() < *eligible_after {
-                return Ok(DetectionResult::NotDetected);
-            }
-        }
-
         match self.phase {
+            // ------------------------------------------------------------------
+            // Phase 1: バトル開始検知
+            // ------------------------------------------------------------------
             DetectorPhase::WaitingForBattle => {
-                // Phase 1a: ピクセル判定 (高速) — 巻物の暗い背景を検出
-                // OCR より速く、フォント依存しないためフォールバックとして機能する
-                let dark_scroll = detect_dark_scroll(frame);
+                // 1a: 暗い巻物背景のピクセル判定 (高速・フォント不依存)
+                let dark = detect_dark_scroll(frame);
 
-                let ocr_hit = if dark_scroll {
-                    false // ピクセル判定で確定済み → OCR をスキップ
-                } else {
-                    // Phase 1b: OCR フォールバック
-                    // WinRT OCR は日本語文字間にスペースを挿入する場合がある ("開 始" など)
-                    // → スペースを除去してから照合する。"開" が欠落する場合もあるので複数キーワードで対応。
+                // 1b: OCR フォールバック (1a がヒットしたときはスキップ)
+                let battle_start = dark || {
                     let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
                         .unwrap_or_default()
                         .replace(char::is_whitespace, "");
+                    // WinRT OCR は文字間スペースを挿入するため除去して照合
+                    // "開" が落ちる場合もあるので "始します" も補完キーワードとして使う
                     text.contains("バトル") || text.contains("開始") || text.contains("始します")
                 };
 
-                if dark_scroll || ocr_hit {
-                    self.phase = DetectorPhase::BattleInProgress {
-                        eligible_after: Instant::now() + Duration::from_secs(BATTLE_START_COOLDOWN_SECS),
-                    };
-                    log::info!(
-                        "[detector] battle start detected (dark_scroll={dark_scroll} ocr={ocr_hit}) → BattleInProgress (eligible in 10s)"
-                    );
+                if battle_start {
+                    self.phase = DetectorPhase::InGame;
+                    log::info!("[detector] battle start (dark={dark}) → InGame");
+                    return Ok(DetectionResult::BattleStarted);
                 }
                 Ok(DetectionResult::NotDetected)
             }
 
-            DetectorPhase::BattleInProgress { .. } => {
-                // クールダウンは上の if-let で確認済み
-                let (win_px, lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
-                let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
-
-                // 黄色矢印が見えなければ待機継続
-                if (win_px < MIN_YELLOW_PIXELS && lose_px < MIN_YELLOW_PIXELS)
-                    || y_spread > max_spread
-                {
+            // ------------------------------------------------------------------
+            // Phase 2: リザルト画面検知
+            // ------------------------------------------------------------------
+            DetectorPhase::InGame => {
+                // リザルト画面の構造的確認: プレイヤー行が灰色背景で並んでいるか
+                // バナー画面 (彩度高い黄/橙) やゲーム中 (ゲーム映像) と区別できる
+                let grey_rows = count_grey_rows(frame);
+                if grey_rows < RESULT_GREY_ROWS_MIN {
                     return Ok(DetectionResult::NotDetected);
                 }
 
-                // リザルト検知 → Phase 1 へ戻す (次の試合まで再検知しない)
+                // 黄色矢印の重心で WIN/LOSE を判定
+                let (win_px, lose_px, centroid_y, _) = count_yellow_arrow_pixels(frame);
+                if win_px < MIN_YELLOW_PIXELS && lose_px < MIN_YELLOW_PIXELS {
+                    return Ok(DetectionResult::NotDetected);
+                }
+
                 self.phase = DetectorPhase::WaitingForBattle;
                 let result = if win_px >= lose_px {
                     DetectionResult::Win  { arrow_y_ratio: centroid_y }
@@ -184,7 +181,7 @@ impl ResultDetector {
                     DetectionResult::Lose { arrow_y_ratio: centroid_y }
                 };
                 log::info!(
-                    "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} spread={y_spread} arrow_y={centroid_y:.3})",
+                    "[detector] {:?} (grey_rows={grey_rows} win={win_px} lose={lose_px} y={centroid_y:.3})",
                     result.result_str()
                 );
                 Ok(result)
@@ -199,10 +196,8 @@ impl ResultDetector {
 
 /// フレームに対して両フェーズの診断情報をまとめて返す。状態変更なし。
 pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::CaptureDebugResult> {
-    // Phase 1a: 暗巻物ピクセル判定
+    // Phase 1
     let dark_scroll_found = detect_dark_scroll(frame);
-
-    // Phase 1b: バトル開始テキスト OCR
     let battle_start_text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
     let battle_start_clean = battle_start_text.replace(char::is_whitespace, "");
@@ -211,27 +206,26 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         || battle_start_clean.contains("始します");
     let battle_start_found = dark_scroll_found || ocr_found;
 
-    // Phase 2: 黄色矢印 (参考情報)
+    // Phase 2
     let win_roi_text = ocr_roi_raw(frame, &WIN_ROI, "en-US")
         .map(|t| t.to_uppercase())
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
-    let win_text_found = win_roi_text.contains("WIN");
-
+    let win_text_found    = win_roi_text.contains("WIN");
+    let grey_rows         = count_grey_rows(frame);
+    let result_screen_ok  = grey_rows >= RESULT_GREY_ROWS_MIN;
     let (yellow_win_px, yellow_lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
-    let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
-    let spread_ok  = y_spread <= max_spread;
 
     let detection_summary = if battle_start_found {
-        let method = if dark_scroll_found { "暗巻物" } else { "OCR" };
-        format!("Phase 1 ✓ バトル開始検出 ({method}) → BattleInProgress へ移行")
-    } else if !spread_ok {
-        format!("Phase 2: NOT_DETECTED — spread={y_spread}px > max={max_spread}px (矢印ではない)")
+        let m = if dark_scroll_found { "暗巻物" } else { "OCR" };
+        format!("Phase 1 ✓ バトル開始 ({m}) → InGame")
+    } else if !result_screen_ok {
+        format!("Phase 2: NOT_RESULT_SCREEN (grey_rows={grey_rows}/{RESULT_GREY_ROWS_MIN})")
     } else if yellow_win_px >= MIN_YELLOW_PIXELS {
-        format!("Phase 2 ✓ WIN (win_px={yellow_win_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
+        format!("Phase 2 ✓ WIN (grey={grey_rows} win_px={yellow_win_px} y={centroid_y:.3})")
     } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
-        format!("Phase 2 ✓ LOSE (lose_px={yellow_lose_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
+        format!("Phase 2 ✓ LOSE (grey={grey_rows} lose_px={yellow_lose_px} y={centroid_y:.3})")
     } else {
-        format!("Phase 2: NOT_DETECTED (win={yellow_win_px} lose={yellow_lose_px} spread={y_spread}px < threshold={MIN_YELLOW_PIXELS})")
+        format!("Phase 2: NOT_DETECTED (grey={grey_rows} win={yellow_win_px} lose={yellow_lose_px})")
     };
 
     Ok(crate::types::CaptureDebugResult {
@@ -242,6 +236,7 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         dark_scroll_found,
         win_roi_text,
         win_text_found,
+        grey_rows,
         yellow_win_px,
         yellow_lose_px,
         centroid_y,
@@ -254,20 +249,16 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
 // 内部ヘルパー
 // ---------------------------------------------------------------------------
 
-/// ROI を切り出して OCR し、生テキストをそのまま返す。
-/// Otsu 二値化で文字を際立たせてから OCR に渡す。
+/// ROI を切り出して Otsu 二値化し OCR する
 fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let cropped   = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
     let processed = preprocess_bgra(&cropped, w, h);
-    let result = ocr_from_bgra(&processed, w, h, Some(lang))?;
-    Ok(result.text)
+    Ok(ocr_from_bgra(&processed, w, h, Some(lang))?.text)
 }
 
-/// 「バトルを開始します！」画面に現れる暗い巻物背景をピクセルで検出する。
-///
-/// BATTLE_START_ROI 内で輝度 < 40 のピクセルが 25% 以上あれば true を返す。
-/// OCR に依存しないため、フォントが読めない状況でも確実に動作する。
+/// 「バトルを開始します！」の暗い巻物背景をピクセル輝度で検出する。
+/// BATTLE_START_ROI 内で輝度 < 40 のピクセルが 25% 以上あれば true。
 fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
     let (x0, y0, w, h) = BATTLE_START_ROI.to_pixels(frame.width, frame.height);
     let mut dark = 0u32;
@@ -280,21 +271,50 @@ fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
             let g = frame.bgra[idx + 1] as u32;
             let r = frame.bgra[idx + 2] as u32;
             total += 1;
-            // 輝度 ≈ 0.299R + 0.587G + 0.114B (整数近似)
             if (299 * r + 587 * g + 114 * b) / 1000 < 40 { dark += 1; }
         }
     }
     total > 0 && dark * 100 / total >= 25
 }
 
-/// 黄色プレイヤー矢印 (▶) のピクセルを WIN/LOSE 各エリアでカウントする。
+/// リザルト画面のプレイヤー行 (8行) をグレー背景で検出する。
 ///
-/// 黄色判定: R > 200, G > 170, B < 80
+/// 各行で x = [0.55, 0.65, 0.75] の 3点をサンプリングし、
+/// 輝度 ≥ 180 かつ 彩度 ≤ 40 のサンプルが 2点以上なら「グレー行」と判定。
+/// 戻り値: グレー行として認定された行数 (0–8)
+fn count_grey_rows(frame: &CapturedFrame) -> u32 {
+    // WIN 4行 (y=0.28–0.63) + LOSE 4行 (y=0.63–0.94) のセンター y 比率
+    const ROW_Y: [f32; 8] = [0.324, 0.411, 0.499, 0.586, 0.669, 0.746, 0.824, 0.901];
+    // プレイヤー統計列 (キル/デス/XP が白背景で並ぶ領域)
+    const SAMPLE_X: [f32; 3] = [0.55, 0.65, 0.75];
+
+    let mut grey_rows = 0u32;
+    for &y_r in &ROW_Y {
+        let y = (y_r * frame.height as f32) as u32;
+        let mut grey_samples = 0u32;
+        for &x_r in &SAMPLE_X {
+            let x   = (x_r * frame.width as f32) as u32;
+            let idx = ((y * frame.width + x) * 4) as usize;
+            if idx + 2 >= frame.bgra.len() { continue; }
+            let b = frame.bgra[idx];
+            let g = frame.bgra[idx + 1];
+            let r = frame.bgra[idx + 2];
+            let lum = (r as u16 + g as u16 + b as u16) / 3;
+            let sat = r.max(g).max(b) - r.min(g).min(b);
+            if lum >= GREY_LUMINANCE_MIN && sat <= GREY_SATURATION_MAX {
+                grey_samples += 1;
+            }
+        }
+        if grey_samples >= 2 { grey_rows += 1; }
+    }
+    grey_rows
+}
+
+/// 黄色プレイヤー矢印 (▶) のピクセルを WIN/LOSE 各エリアでカウントする。
 /// 戻り値: (win_count, lose_count, centroid_y_ratio, y_spread_px)
 fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
     let w = frame.width;
     let h = frame.height;
-
     let x0    = (ARROW_X_START    * w as f32) as u32;
     let x1    = (ARROW_X_END      * w as f32) as u32;
     let y0    = (ARROW_Y_START    * h as f32) as u32;
@@ -315,7 +335,6 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
             let b = frame.bgra[idx];
             let g = frame.bgra[idx + 1];
             let r = frame.bgra[idx + 2];
-
             if r > 200 && g > 170 && b < 80 {
                 if y < y_mid { win_count += 1; } else { lose_count += 1; }
                 sum_y    += y as u64;
@@ -328,11 +347,8 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
 
     let centroid_y = if total_px > 0 {
         (sum_y / total_px as u64) as f32 / h as f32
-    } else {
-        0.5
-    };
+    } else { 0.5 };
     let y_spread = if total_px > 0 { max_y_px - min_y_px } else { 0 };
-
     (win_count, lose_count, centroid_y, y_spread)
 }
 
@@ -343,7 +359,7 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
 pub fn crop_bgra(bgra: &[u8], full_width: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((w * h * 4) as usize);
     for row in 0..h {
-        let src_y = y + row;
+        let src_y     = y + row;
         let row_start = ((src_y * full_width + x) * 4) as usize;
         let row_end   = row_start + (w * 4) as usize;
         if row_end <= bgra.len() {
@@ -397,8 +413,36 @@ mod tests {
 
     #[test]
     fn test_detector_initial_phase() {
-        let det = ResultDetector::new(30);
+        let det = ResultDetector::new();
         assert_eq!(det.phase, DetectorPhase::WaitingForBattle);
+    }
+
+    #[test]
+    fn test_grey_row_detection_all_white() {
+        // 全白フレームでは8行すべてグレー行として検出されるはず
+        let w = 1920u32;
+        let h = 1080u32;
+        let bgra = vec![255u8; (w * h * 4) as usize];
+        let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
+        let rows = count_grey_rows(&frame);
+        assert_eq!(rows, 8, "all-white frame should have 8 grey rows");
+    }
+
+    #[test]
+    fn test_grey_row_detection_all_colored() {
+        // 鮮やかな黄色フレームではグレー行なし
+        let w = 1920u32;
+        let h = 1080u32;
+        let mut bgra = vec![0u8; (w * h * 4) as usize];
+        for i in 0..(w * h) as usize {
+            bgra[i * 4]     = 30;  // B
+            bgra[i * 4 + 1] = 200; // G
+            bgra[i * 4 + 2] = 240; // R  → 高彩度
+            bgra[i * 4 + 3] = 255;
+        }
+        let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
+        let rows = count_grey_rows(&frame);
+        assert_eq!(rows, 0, "saturated yellow frame should have 0 grey rows");
     }
 
     #[test]
@@ -416,7 +460,7 @@ mod tests {
             bgra[idx + 3] = 255;
         }
         let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
-        let (win_px, lose_px, centroid_y, _y_spread) = count_yellow_arrow_pixels(&frame);
+        let (win_px, lose_px, centroid_y, _) = count_yellow_arrow_pixels(&frame);
         assert!(win_px >= 5, "expected win yellow pixels, got {win_px}");
         assert_eq!(lose_px, 0);
         assert!(centroid_y > 0.3 && centroid_y < 0.5, "centroid_y={centroid_y:.3}");
@@ -424,14 +468,16 @@ mod tests {
 
     #[test]
     fn test_detection_result_helpers() {
-        let win  = DetectionResult::Win  { arrow_y_ratio: 0.44 };
-        let lose = DetectionResult::Lose { arrow_y_ratio: 0.72 };
-        let none = DetectionResult::NotDetected;
-        assert_eq!(win.result_str(),  Some("win"));
-        assert_eq!(lose.result_str(), Some("lose"));
-        assert_eq!(none.result_str(), None);
+        let started = DetectionResult::BattleStarted;
+        let win     = DetectionResult::Win  { arrow_y_ratio: 0.44 };
+        let lose    = DetectionResult::Lose { arrow_y_ratio: 0.72 };
+        let none    = DetectionResult::NotDetected;
+        assert_eq!(started.result_str(), None);
+        assert_eq!(win.result_str(),     Some("win"));
+        assert_eq!(lose.result_str(),    Some("lose"));
+        assert_eq!(none.result_str(),    None);
         assert!((win.arrow_y_ratio().unwrap()  - 0.44).abs() < 1e-5);
         assert!((lose.arrow_y_ratio().unwrap() - 0.72).abs() < 1e-5);
-        assert!(none.arrow_y_ratio().is_none());
+        assert!(started.arrow_y_ratio().is_none());
     }
 }

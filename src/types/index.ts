@@ -6,7 +6,7 @@ export interface Match {
   rule: string | null;
   stage: string | null;
   weapon: string | null;
-  result: 'win' | 'lose';
+  result: 'win' | 'lose' | 'in_progress';
   kill_count: number | null;
   assist_count: number | null;
   death_count: number | null;
@@ -49,6 +49,7 @@ export interface CaptureDebugResult {
   battle_start_text: string;
   battle_start_found: boolean;
   dark_scroll_found: boolean;
+  grey_rows: number;
   win_roi_text: string;
   win_text_found: boolean;
   yellow_win_px: number;
@@ -61,7 +62,7 @@ export interface CaptureDebugResult {
 export interface XpDataPoint {
   played_at: string;
   xp_after: number;
-  result: 'win' | 'lose';
+  result: 'win' | 'lose' | 'in_progress';
 }
 
 // ルール一覧

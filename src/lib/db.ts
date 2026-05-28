@@ -80,6 +80,35 @@ export async function insertMatch(m: RawMatch): Promise<void> {
 // UPDATE
 // ---------------------------------------------------------------------------
 
+/**
+ * "in_progress" レコードを win/lose に更新する。
+ * 同一 ID のレコードが存在しない場合は新規 INSERT にフォールバックする。
+ */
+export async function updateMatchResult(m: RawMatch): Promise<void> {
+  const db = await getDb();
+  const res = await db.execute(
+    `UPDATE matches
+     SET result = $1, rule = $2, stage = $3,
+         kill_count = $4, assist_count = $5, death_count = $6, xp_after = $7,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $8`,
+    [
+      m.result,
+      m.rule          ?? null,
+      m.stage         ?? null,
+      m.kill_count    ?? null,
+      m.assist_count  ?? null,
+      m.death_count   ?? null,
+      m.xp_after      ?? null,
+      m.id,
+    ],
+  );
+  if (res.rowsAffected === 0) {
+    // in_progress レコードが存在しない場合 (capture 途中から開始した等) は挿入
+    await insertMatch(m);
+  }
+}
+
 export async function dbUpdateWeapon(id: string, weapon: string): Promise<void> {
   const db = await getDb();
   await db.execute(

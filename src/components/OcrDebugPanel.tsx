@@ -142,9 +142,14 @@ export function OcrDebugPanel() {
               </pre>
             </div>
 
-            {/* Phase 2: 黄色矢印 */}
+            {/* Phase 2: リザルト画面判定 */}
             <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
-              <span className="text-slate-400">Phase 2: 黄色矢印ピクセル</span>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Phase 2: リザルト画面判定</span>
+                <span className={diagResult.grey_rows >= 4 ? 'text-green-400' : 'text-slate-500'}>
+                  グレー行 {diagResult.grey_rows}/8 {diagResult.grey_rows >= 4 ? '✓' : '✗'}
+                </span>
+              </div>
               <div className="grid grid-cols-4 gap-1 mt-1">
                 <div className="bg-slate-900 rounded p-1 text-center">
                   <p className="text-slate-500 text-xs">WIN 側</p>
@@ -164,7 +169,7 @@ export function OcrDebugPanel() {
                 </div>
                 <div className="bg-slate-900 rounded p-1 text-center">
                   <p className="text-slate-500 text-xs">spread</p>
-                  <p className={`font-mono font-bold ${diagResult.y_spread > diagResult.frame_h * 0.12 ? 'text-red-400' : 'text-slate-300'}`}>
+                  <p className="text-slate-300 font-mono font-bold">
                     {diagResult.y_spread}px
                   </p>
                 </div>
