@@ -124,9 +124,11 @@ impl ResultDetector {
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
         match self.phase {
             DetectorPhase::WaitingForBattle => {
-                // 「バトルを開始します！」が見えたら試合中フラグを立てる
+                // WinRT OCR は日本語文字間にスペースを挿入する場合がある ("開 始" など)
+                // → スペースを除去してから照合する
                 let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .replace(char::is_whitespace, "");
                 if text.contains("バトル") || text.contains("開始") {
                     self.phase = DetectorPhase::BattleInProgress;
                     log::info!("[detector] battle start detected → BattleInProgress");
@@ -171,8 +173,10 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
     // Phase 1: バトル開始テキスト
     let battle_start_text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
+    // WinRT OCR は文字間にスペースを挿入するため除去して照合
+    let battle_start_clean = battle_start_text.replace(char::is_whitespace, "");
     let battle_start_found =
-        battle_start_text.contains("バトル") || battle_start_text.contains("開始");
+        battle_start_clean.contains("バトル") || battle_start_clean.contains("開始");
 
     // Phase 2: 黄色矢印 (参考情報)
     let win_roi_text = ocr_roi_raw(frame, &WIN_ROI, "en-US")
