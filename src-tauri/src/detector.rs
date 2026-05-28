@@ -13,6 +13,7 @@ use crate::{
     ocr::ocr_from_bgra,
 };
 use anyhow::Result;
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // ROI 定義 (16:9 フレームに対する比率)
@@ -81,7 +82,8 @@ impl Roi {
 #[derive(Debug, PartialEq)]
 enum DetectorPhase {
     WaitingForBattle,
-    BattleInProgress,
+    /// バトル開始を検知後、eligible_after を過ぎるまでは黄色ピクセルスキャンを行わない
+    BattleInProgress { eligible_after: Instant },
 }
 
 pub struct ResultDetector {
@@ -122,21 +124,31 @@ impl ResultDetector {
     /// 2フェーズ検知。detect() は blocking OCR を含むため、
     /// 呼び出し元は tokio::task::block_in_place でラップすること。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
+        // BattleInProgress のクールダウン中は即リターン (バトル開始画面の黄色を無視するため)
+        if let DetectorPhase::BattleInProgress { eligible_after } = &self.phase {
+            if Instant::now() < *eligible_after {
+                return Ok(DetectionResult::NotDetected);
+            }
+        }
+
         match self.phase {
             DetectorPhase::WaitingForBattle => {
                 // WinRT OCR は日本語文字間にスペースを挿入する場合がある ("開 始" など)
-                // → スペースを除去してから照合する
+                // → スペースを除去してから照合する。"開" が欠落する場合もあるので複数キーワードで対応。
                 let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
                     .unwrap_or_default()
                     .replace(char::is_whitespace, "");
-                if text.contains("バトル") || text.contains("開始") {
-                    self.phase = DetectorPhase::BattleInProgress;
-                    log::info!("[detector] battle start detected → BattleInProgress");
+                if text.contains("バトル") || text.contains("開始") || text.contains("始します") {
+                    self.phase = DetectorPhase::BattleInProgress {
+                        eligible_after: Instant::now() + Duration::from_secs(10),
+                    };
+                    log::info!("[detector] battle start detected → BattleInProgress (eligible in 10s)");
                 }
                 Ok(DetectionResult::NotDetected)
             }
 
-            DetectorPhase::BattleInProgress => {
+            DetectorPhase::BattleInProgress { .. } => {
+                // クールダウンは上の if-let で確認済み
                 let (win_px, lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
                 let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
 
@@ -175,8 +187,9 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
     // WinRT OCR は文字間にスペースを挿入するため除去して照合
     let battle_start_clean = battle_start_text.replace(char::is_whitespace, "");
-    let battle_start_found =
-        battle_start_clean.contains("バトル") || battle_start_clean.contains("開始");
+    let battle_start_found = battle_start_clean.contains("バトル")
+        || battle_start_clean.contains("開始")
+        || battle_start_clean.contains("始します");
 
     // Phase 2: 黄色矢印 (参考情報)
     let win_roi_text = ocr_roi_raw(frame, &WIN_ROI, "en-US")
