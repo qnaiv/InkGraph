@@ -43,20 +43,23 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
   const [error, setError] = useState<string | null>(null);
 
   // ── DB から試合一覧をロード ───────────────────────────────────
-  const loadMatches = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const rows = await selectMatches(100, ruleFilter);
-      setMatches(rows.map(parseMatch));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setIsLoading(false);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const rows = await selectMatches(100, ruleFilter);
+        if (!cancelled) setMatches(rows.map(parseMatch));
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
     }
+    load();
+    return () => { cancelled = true; };
   }, [ruleFilter]);
-
-  useEffect(() => { loadMatches(); }, [loadMatches]);
 
   // ── Rust からのリアルタイム通知を購読 ───────────────────────
   useEffect(() => {

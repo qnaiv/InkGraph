@@ -274,7 +274,8 @@ fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
 }
 
 /// 「バトルを開始します！」の暗い巻物背景をピクセル輝度で検出する。
-/// BATTLE_START_ROI 内で輝度 < 40 のピクセルが 25% 以上あれば true。
+/// BATTLE_START_ROI 内で輝度 < 30 のピクセルが 40% 以上あれば true。
+/// 閾値を厳しくすることで、ロビー・メニュー画面での誤検知を防ぐ。
 fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
     let (x0, y0, w, h) = BATTLE_START_ROI.to_pixels(frame.width, frame.height);
     let mut dark = 0u32;
@@ -287,10 +288,10 @@ fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
             let g = frame.bgra[idx + 1] as u32;
             let r = frame.bgra[idx + 2] as u32;
             total += 1;
-            if (299 * r + 587 * g + 114 * b) / 1000 < 40 { dark += 1; }
+            if (299 * r + 587 * g + 114 * b) / 1000 < 30 { dark += 1; }
         }
     }
-    total > 0 && dark * 100 / total >= 25
+    total > 0 && dark * 100 / total >= 40
 }
 
 /// リザルト画面のプレイヤー行をグレー背景で検出する。

@@ -46,9 +46,8 @@ const RESULT_COLORS = {
   lose: '#f87171',  // red-400
 };
 
-function CustomDot(props: any) {
-  const { cx, cy, payload } = props;
-  const color = RESULT_COLORS[payload.result as 'win' | 'lose'];
+function CustomDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDataPoint }) {
+  const color = RESULT_COLORS[(payload?.result ?? 'lose') as 'win' | 'lose'];
   return (
     <circle
       cx={cx}
@@ -61,7 +60,7 @@ function CustomDot(props: any) {
   );
 }
 
-function CustomTooltip({ active, payload }: any) {
+function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartDataPoint }> }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as ChartDataPoint;
   return (
