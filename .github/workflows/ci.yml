@@ -46,7 +46,8 @@ jobs:
             file \
             libssl-dev \
             libgtk-3-dev \
-            libglib2.0-dev
+            libglib2.0-dev \
+            libsqlite3-dev
 
       - name: Run Rust unit tests
         run: cargo test --lib -- --test-threads=1
