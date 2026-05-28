@@ -43,7 +43,8 @@ mod windows_impl {
                 Graphics::Capture::IGraphicsCaptureItemInterop,
             },
             UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+                EnumWindows, GetParent, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
+                IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
             },
         },
     };
@@ -63,11 +64,26 @@ mod windows_impl {
 
     extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         unsafe {
+            // 非表示ウィンドウを除外
             if !IsWindowVisible(hwnd).as_bool() {
                 return BOOL(1);
             }
+
+            // 子ウィンドウを除外 (親がある = 別ウィンドウの一部)
+            let parent = GetParent(hwnd);
+            if !parent.0.is_null() {
+                return BOOL(1);
+            }
+
+            // ツールウィンドウを除外 (システムトレイ・オーバーレイ等)
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+                return BOOL(1);
+            }
+
+            // タイトルが短すぎるウィンドウを除外
             let len = GetWindowTextLengthW(hwnd);
-            if len == 0 {
+            if len < 2 {
                 return BOOL(1);
             }
             let mut buf = vec![0u16; (len + 1) as usize];
@@ -76,6 +92,7 @@ mod windows_impl {
             if title.trim().is_empty() {
                 return BOOL(1);
             }
+
             let windows = &mut *(lparam.0 as *mut Vec<WindowInfo>);
             windows.push(WindowInfo { hwnd: hwnd.0 as u64, title });
         }

@@ -1,19 +1,16 @@
 /// IkaVision XP — Tauri コマンド定義
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
-    types::{OcrTestResult, WindowInfo},
+    types::{CaptureStatusPayload, OcrTestResult, WindowInfo},
 };
 
 // ---------------------------------------------------------------------------
 // OCR テストコマンド
 // ---------------------------------------------------------------------------
 
-/// 画像ファイルから OCR を実行するテストコマンド
-///
-/// フロントエンドから invoke("test_ocr", { imagePath: "C:/..." }) で呼び出す
 #[tauri::command]
 pub async fn test_ocr(image_path: String) -> Result<OcrTestResult, String> {
     let result = ocr_from_file(&image_path, None)
@@ -26,17 +23,13 @@ pub async fn test_ocr(image_path: String) -> Result<OcrTestResult, String> {
         .filter(|l| !l.is_empty())
         .collect();
 
-    Ok(OcrTestResult {
-        raw_text: result.text,
-        lines,
-    })
+    Ok(OcrTestResult { raw_text: result.text, lines })
 }
 
 // ---------------------------------------------------------------------------
 // キャプチャ制御コマンド
 // ---------------------------------------------------------------------------
 
-/// 利用可能なウィンドウ一覧を返す
 #[tauri::command]
 pub async fn list_windows() -> Result<Vec<WindowInfo>, String> {
     #[cfg(target_os = "windows")]
@@ -53,36 +46,56 @@ pub async fn list_windows() -> Result<Vec<WindowInfo>, String> {
     }
 }
 
-/// キャプチャを開始する
+/// キャプチャを開始する。
+/// 既存のタスクがあれば abort() してから新しいタスクを起動する。
+/// `hwnd` でウィンドウを直接指定することでタイトル曖昧マッチを排除。
 #[tauri::command]
 pub async fn start_capture(
     app: AppHandle,
     state: State<'_, AppState>,
-    window_title: String,
+    hwnd: u64,
 ) -> Result<(), String> {
-    let mut capturing = state.is_capturing.lock().await;
-    if *capturing {
-        return Err("Already capturing".to_string());
+    // 既存タスクを abort（再起動時のレースコンディション防止）
+    {
+        let mut task = state.capture_task.lock().await;
+        if let Some(handle) = task.take() {
+            handle.abort();
+        }
     }
-    *capturing = true;
-    drop(capturing);
 
-    log::info!("[commands] start_capture: window_title={window_title}");
+    *state.is_capturing.lock().await = true;
+    log::info!("[commands] start_capture: hwnd={hwnd}");
 
     let state_clone = state.inner().clone();
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn(async move {
-        crate::capture_loop::run(app_clone, state_clone, window_title).await;
+    let app_clone   = app.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        crate::capture_loop::run(app_clone, state_clone, hwnd).await;
     });
 
+    *state.capture_task.lock().await = Some(handle);
     Ok(())
 }
 
-/// キャプチャを停止する
+/// キャプチャを停止する。
+/// タスクを abort() して即座に終了させ、inactive をフロントエンドに通知する。
 #[tauri::command]
-pub async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
-    let mut capturing = state.is_capturing.lock().await;
-    *capturing = false;
+pub async fn stop_capture(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut task = state.capture_task.lock().await;
+        if let Some(handle) = task.take() {
+            handle.abort();
+        }
+    }
+
+    *state.is_capturing.lock().await = false;
+
+    // abort でタスクが強制終了するため run() 末尾が動かない → ここで通知
+    let _ = app.emit("capture_status", CaptureStatusPayload {
+        active: false,
+        fps: 0.0,
+        window_title: None,
+    });
+
     log::info!("[commands] stop_capture");
     Ok(())
 }

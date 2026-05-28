@@ -11,10 +11,10 @@ interface HeaderProps {
 }
 
 export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
-  const [windows, setWindows] = useState<WindowInfo[]>([]);
+  const [windows, setWindows]           = useState<WindowInfo[]>([]);
   const [selectedHwnd, setSelectedHwnd] = useState<number | null>(null);
-  const [fps, setFps] = useState(0);
-  const [showWindowPicker, setShowWindowPicker] = useState(false);
+  const [fps, setFps]                   = useState(0);
+  const [loadError, setLoadError]       = useState<string | null>(null);
 
   // キャプチャ状態イベントを購読
   useEffect(() => {
@@ -25,25 +25,21 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
     return () => { unlisten.then((fn) => fn()); };
   }, [onCapturingChange]);
 
+  // ドロップダウンにフォーカスが当たったときウィンドウ一覧を更新
   const loadWindows = async () => {
+    setLoadError(null);
     try {
       const list = await invoke<WindowInfo[]>('list_windows');
       setWindows(list);
     } catch (e) {
-      console.error('list_windows failed:', e);
+      setLoadError(String(e));
     }
   };
 
   const handleStartCapture = async () => {
-    if (selectedHwnd == null) {
-      setShowWindowPicker(true);
-      await loadWindows();
-      return;
-    }
-    const win = windows.find((w) => w.hwnd === selectedHwnd);
-    if (!win) return;
+    if (selectedHwnd == null) return;
     try {
-      await invoke('start_capture', { windowTitle: win.title });
+      await invoke('start_capture', { hwnd: selectedHwnd });
       onCapturingChange(true);
     } catch (e) {
       console.error('start_capture failed:', e);
@@ -80,34 +76,47 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
           </div>
         )}
 
-        {showWindowPicker && !isCapturing && (
-          <select
-            className="bg-slate-700 text-white text-sm rounded-lg px-2 py-1 outline-none"
-            value={selectedHwnd ?? ''}
-            onChange={(e) => setSelectedHwnd(Number(e.target.value))}
-          >
-            <option value="">ウィンドウを選択</option>
-            {windows.map((w) => (
-              <option key={w.hwnd} value={w.hwnd}>
-                {w.title.slice(0, 40)}
-              </option>
-            ))}
-          </select>
+        {/* ウィンドウ選択 + キャプチャ開始 (キャプチャ中は非表示) */}
+        {!isCapturing && (
+          <div className="flex items-center gap-2">
+            <div className="flex flex-col">
+              <select
+                className="bg-slate-700 text-white text-sm rounded-lg px-2 py-1.5 outline-none cursor-pointer"
+                value={selectedHwnd ?? ''}
+                onFocus={loadWindows}
+                onChange={(e) => setSelectedHwnd(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">ウィンドウを選択...</option>
+                {windows.map((w) => (
+                  <option key={w.hwnd} value={w.hwnd}>
+                    {w.title.slice(0, 50)}
+                  </option>
+                ))}
+              </select>
+              {loadError && (
+                <p className="text-xs text-red-400 mt-0.5">{loadError}</p>
+              )}
+            </div>
+
+            <button
+              className={`px-4 py-1.5 text-white text-sm font-medium rounded-lg transition-colors
+                ${selectedHwnd == null
+                  ? 'bg-indigo-600/40 cursor-not-allowed'
+                  : 'bg-indigo-600 hover:bg-indigo-500 cursor-pointer'}`}
+              disabled={selectedHwnd == null}
+              onClick={handleStartCapture}
+            >
+              ▶ キャプチャ開始
+            </button>
+          </div>
         )}
 
-        {isCapturing ? (
+        {isCapturing && (
           <button
             className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-colors"
             onClick={handleStopCapture}
           >
             ⏹ 停止
-          </button>
-        ) : (
-          <button
-            className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
-            onClick={handleStartCapture}
-          >
-            ▶ キャプチャ開始
           </button>
         )}
       </div>

@@ -1,8 +1,8 @@
 /// IkaVision XP — キャプチャループ
 ///
-/// `WindowCaptureSession` を一度だけ作成してループ全体で保持する。
-/// これにより WGC キャプチャインジケーターが点滅せず、
-/// フレームも安定して取得できる。
+/// バックグラウンドタスクとして動作し、対象ウィンドウを監視します。
+/// WIN/LOSE を検知したらデータを抽出して DB に保存し、
+/// フロントエンドへイベントを送信します。
 
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -11,22 +11,14 @@ use crate::{
     types::CaptureStatusPayload,
 };
 
-pub async fn run(app: AppHandle, state: AppState, window_title: String) {
-    log::info!("[capture_loop] starting for window: {window_title}");
-
-    {
-        let mut target = state.target_window.lock().await;
-        *target = Some(window_title.clone());
-    }
-
-    let _ = app.emit(
-        "capture_status",
-        CaptureStatusPayload { active: true, fps: 0.0, window_title: Some(window_title.clone()) },
-    );
+/// キャプチャループのメインエントリポイント。
+/// hwnd を直接受け取り、タイトルマッチは行わない。
+pub async fn run(app: AppHandle, state: AppState, hwnd: u64) {
+    log::info!("[capture_loop] starting for hwnd={hwnd}");
 
     #[cfg(target_os = "windows")]
     {
-        run_windows_loop(&app, &state, &window_title).await;
+        run_windows_loop(&app, &state, hwnd).await;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -34,10 +26,14 @@ pub async fn run(app: AppHandle, state: AppState, window_title: String) {
         run_stub_loop(&app, &state).await;
     }
 
-    let _ = app.emit(
-        "capture_status",
-        CaptureStatusPayload { active: false, fps: 0.0, window_title: None },
-    );
+    // タスクが自然終了した場合の後処理
+    // (stop_capture による abort の場合はここに到達しない)
+    *state.is_capturing.lock().await = false;
+    let _ = app.emit("capture_status", CaptureStatusPayload {
+        active: false,
+        fps: 0.0,
+        window_title: None,
+    });
 
     log::info!("[capture_loop] stopped");
 }
@@ -47,7 +43,7 @@ pub async fn run(app: AppHandle, state: AppState, window_title: String) {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
-async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str) {
+async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
         db::new_match_from_ocr,
@@ -56,25 +52,30 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
         types::MatchDetectedPayload,
     };
 
-    let hwnd = match find_hwnd_by_title(window_title) {
-        Some(h) => h,
-        None => {
-            log::error!("[capture_loop] window not found: {window_title}");
-            return;
-        }
-    };
-
-    // セッションはループ外で一度だけ作成する (これがポイント)
+    // WGC セッションをループ外で一度だけ作成
     let session = match tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd)) {
         Ok(s) => s,
         Err(e) => {
-            log::error!("[capture_loop] failed to create WGC session: {e}");
+            log::error!("[capture_loop] WGC session failed: {e}");
+            // セッション作成失敗をフロントエンドに通知
+            let _ = app.emit("capture_status", CaptureStatusPayload {
+                active: false,
+                fps: 0.0,
+                window_title: None,
+            });
             return;
         }
     };
 
-    let mut detector = ResultDetector::new(30);
-    let interval     = Duration::from_millis(200); // 5 fps
+    // セッション準備完了後にキャプチャ中を通知
+    let _ = app.emit("capture_status", CaptureStatusPayload {
+        active: true,
+        fps: 5.0,
+        window_title: None,
+    });
+
+    let mut detector  = ResultDetector::new(30);
+    let interval      = Duration::from_millis(200); // 5 fps
     let mut frame_count: u64 = 0;
 
     loop {
@@ -82,7 +83,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
             break;
         }
 
-        // フレーム取得 (ブロッキング処理を Tokio に伝える)
         let frame = match tokio::task::block_in_place(|| session.get_frame()) {
             Ok(f) => f,
             Err(e) => {
@@ -97,7 +97,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
             log::debug!("[capture_loop] frame #{frame_count} {}x{}", frame.width, frame.height);
         }
 
-        // WIN/LOSE 検知
         let detection = match detector.detect(&frame) {
             Ok(d) => d,
             Err(e) => {
@@ -137,16 +136,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
     // session は Drop で自動的に Close される
 }
 
-#[cfg(target_os = "windows")]
-fn find_hwnd_by_title(title: &str) -> Option<u64> {
-    use crate::capture::list_capturable_windows;
-    list_capturable_windows()
-        .ok()?
-        .into_iter()
-        .find(|w| w.title.contains(title))
-        .map(|w| w.hwnd)
-}
-
 // ---------------------------------------------------------------------------
 // 非 Windows スタブ (CI / macOS 開発確認用)
 // ---------------------------------------------------------------------------
@@ -156,14 +145,18 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
     use crate::{db::new_match_from_ocr, types::MatchDetectedPayload};
 
     log::warn!("[capture_loop] running stub loop (non-Windows)");
+
+    let _ = app.emit("capture_status", CaptureStatusPayload {
+        active: true,
+        fps: 0.0,
+        window_title: None,
+    });
+
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let dummy = new_match_from_ocr(
         "win",
-        Some(5),
-        Some(1),
-        Some(2),
-        Some(2341.5),
+        Some(5), Some(1), Some(2), Some(2341.5),
         Some("ガチエリア".to_string()),
         Some("マテガイ放水路".to_string()),
     );
