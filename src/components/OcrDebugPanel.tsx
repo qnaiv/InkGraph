@@ -3,94 +3,210 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { OcrTestResult } from '../types';
+import type { OcrTestResult, CaptureDebugResult, WindowInfo } from '../types';
 
 export function OcrDebugPanel() {
+  // ── ファイル OCR ──────────────────────────────────────────────────────────
   const [imagePath, setImagePath] = useState('');
-  const [result, setResult] = useState<OcrTestResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [ocrResult, setOcrResult] = useState<OcrTestResult | null>(null);
+  const [ocrError, setOcrError]   = useState<string | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
 
   const runOcr = async () => {
     if (!imagePath.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
+    setOcrLoading(true);
+    setOcrError(null);
+    setOcrResult(null);
     try {
-      const res = await invoke<OcrTestResult>('test_ocr', {
-        imagePath: imagePath.trim(),
-      });
-      setResult(res);
+      const res = await invoke<OcrTestResult>('test_ocr', { imagePath: imagePath.trim() });
+      setOcrResult(res);
     } catch (e) {
-      setError(String(e));
+      setOcrError(String(e));
     } finally {
-      setLoading(false);
+      setOcrLoading(false);
+    }
+  };
+
+  // ── ライブキャプチャ診断 ──────────────────────────────────────────────────
+  const [windows, setWindows]       = useState<WindowInfo[]>([]);
+  const [diagHwnd, setDiagHwnd]     = useState<number | null>(null);
+  const [diagResult, setDiagResult] = useState<CaptureDebugResult | null>(null);
+  const [diagError, setDiagError]   = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+
+  const loadWindows = async () => {
+    try {
+      const list = await invoke<WindowInfo[]>('list_windows');
+      setWindows(list);
+    } catch (_) { /* ignore */ }
+  };
+
+  const runDiag = async () => {
+    if (diagHwnd == null) return;
+    setDiagLoading(true);
+    setDiagError(null);
+    setDiagResult(null);
+    try {
+      const res = await invoke<CaptureDebugResult>('debug_capture', { hwnd: diagHwnd });
+      setDiagResult(res);
+    } catch (e) {
+      setDiagError(String(e));
+    } finally {
+      setDiagLoading(false);
     }
   };
 
   return (
-    <div className="fixed bottom-4 right-4 w-96 bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-amber-400 font-bold text-xs tracking-widest">
-          🔬 OCR DEBUG (Issue #2)
-        </span>
+    <div className="fixed bottom-4 right-4 w-[420px] bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm space-y-5 max-h-[90vh] overflow-y-auto">
+      <div className="flex items-center justify-between">
+        <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
         <span className="text-slate-500 text-xs">開発モード専用</span>
       </div>
 
-      {/* パス入力 */}
-      <div className="flex gap-2 mb-3">
-        <input
-          className="flex-1 bg-slate-800 text-white placeholder-slate-500 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-amber-500"
-          placeholder="C:\Users\...\result.png"
-          value={imagePath}
-          onChange={(e) => setImagePath(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && runOcr()}
-        />
-        <button
-          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors"
-          onClick={runOcr}
-          disabled={loading || !imagePath.trim()}
-        >
-          {loading ? '…' : 'OCR 実行'}
-        </button>
-      </div>
+      {/* ── ① ライブキャプチャ診断 ─────────────────────────────────────── */}
+      <section>
+        <p className="text-amber-300 text-xs font-semibold mb-2">① ライブキャプチャ診断</p>
+        <p className="text-slate-500 text-xs mb-2 leading-relaxed">
+          リザルト画面を表示した状態でウィンドウを選び「診断」を押す。<br />
+          各ステップの通過状況が確認できる。
+        </p>
 
-      {/* エラー */}
-      {error && (
-        <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 mb-2 text-red-300 text-xs break-all">
-          ❌ {error}
+        <div className="flex gap-2 mb-2">
+          <select
+            className="flex-1 bg-slate-800 text-white text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer"
+            value={diagHwnd ?? ''}
+            onFocus={loadWindows}
+            onChange={(e) => setDiagHwnd(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">ウィンドウを選択...</option>
+            {windows.map((w) => (
+              <option key={w.hwnd} value={w.hwnd}>{w.title.slice(0, 45)}</option>
+            ))}
+          </select>
+          <button
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            onClick={runDiag}
+            disabled={diagLoading || diagHwnd == null}
+          >
+            {diagLoading ? '…' : '診断'}
+          </button>
         </div>
-      )}
 
-      {/* 結果 */}
-      {result && (
-        <div className="space-y-2">
-          <div className="bg-slate-800 rounded-lg p-2">
-            <p className="text-slate-400 text-xs mb-1">認識テキスト (raw)</p>
-            <pre className="text-green-300 text-xs whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-              {result.raw_text || '(空)'}
-            </pre>
+        {diagError && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all">
+            ❌ {diagError}
           </div>
-          <div className="bg-slate-800 rounded-lg p-2">
-            <p className="text-slate-400 text-xs mb-1">
-              行分割 ({result.lines.length} 行)
-            </p>
-            <ul className="text-white text-xs space-y-0.5 max-h-20 overflow-y-auto">
-              {result.lines.map((l, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="text-slate-500 w-4 text-right">{i + 1}</span>
-                  <span>{l}</span>
-                </li>
-              ))}
-            </ul>
+        )}
+
+        {diagResult && (
+          <div className="space-y-1.5">
+            {/* フレーム情報 */}
+            <div className="bg-slate-800 rounded-lg p-2 flex justify-between text-xs">
+              <span className="text-slate-400">フレームサイズ</span>
+              <span className="text-white font-mono">{diagResult.frame_w} × {diagResult.frame_h}</span>
+            </div>
+
+            {/* Step 1: OCR */}
+            <div className="bg-slate-800 rounded-lg p-2 text-xs">
+              <div className="flex justify-between mb-1">
+                <span className="text-slate-400">Step 1: WIN_ROI OCR</span>
+                <span className={diagResult.win_text_found ? 'text-green-400' : 'text-red-400'}>
+                  {diagResult.win_text_found ? '✓ WIN 検出' : '✗ WIN 未検出'}
+                </span>
+              </div>
+              <pre className="text-slate-300 text-xs whitespace-pre-wrap break-all max-h-16 overflow-y-auto bg-slate-900 rounded p-1">
+                {diagResult.win_roi_text || '(空)'}
+              </pre>
+            </div>
+
+            {/* Step 2: 黄色矢印 */}
+            <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
+              <span className="text-slate-400">Step 2: 黄色矢印ピクセル</span>
+              <div className="grid grid-cols-3 gap-1 mt-1">
+                <div className="bg-slate-900 rounded p-1 text-center">
+                  <p className="text-slate-500 text-xs">WIN 側</p>
+                  <p className={`font-mono font-bold ${diagResult.yellow_win_px >= 15 ? 'text-green-400' : 'text-slate-300'}`}>
+                    {diagResult.yellow_win_px}
+                  </p>
+                </div>
+                <div className="bg-slate-900 rounded p-1 text-center">
+                  <p className="text-slate-500 text-xs">LOSE 側</p>
+                  <p className={`font-mono font-bold ${diagResult.yellow_lose_px >= 15 ? 'text-yellow-400' : 'text-slate-300'}`}>
+                    {diagResult.yellow_lose_px}
+                  </p>
+                </div>
+                <div className="bg-slate-900 rounded p-1 text-center">
+                  <p className="text-slate-500 text-xs">重心 y</p>
+                  <p className="text-white font-mono font-bold">
+                    {diagResult.centroid_y.toFixed(3)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 判定サマリー */}
+            <div className={`rounded-lg p-2 text-xs break-all ${
+              diagResult.detection_summary.startsWith('WIN') ? 'bg-green-900/40 border border-green-700 text-green-300' :
+              diagResult.detection_summary.startsWith('LOSE') ? 'bg-yellow-900/40 border border-yellow-700 text-yellow-300' :
+              'bg-slate-800 border border-slate-600 text-slate-400'
+            }`}>
+              <span className="font-semibold">判定: </span>{diagResult.detection_summary}
+            </div>
           </div>
-          {/* WIN/LOSE 検出チェック */}
-          <div className="flex gap-2">
-            {['WIN', 'LOSE', 'ガチエリア', 'ガチヤグラ', 'ガチホコ', 'ガチアサリ'].map(
-              (kw) => {
-                const found = result.raw_text
-                  .toUpperCase()
-                  .includes(kw.toUpperCase());
+        )}
+      </section>
+
+      <hr className="border-slate-700" />
+
+      {/* ── ② ファイル OCR テスト ────────────────────────────────────────── */}
+      <section>
+        <p className="text-amber-300 text-xs font-semibold mb-2">② ファイル OCR テスト</p>
+
+        <div className="flex gap-2 mb-3">
+          <input
+            className="flex-1 bg-slate-800 text-white placeholder-slate-500 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-amber-500"
+            placeholder="C:\Users\...\result.png"
+            value={imagePath}
+            onChange={(e) => setImagePath(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && runOcr()}
+          />
+          <button
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors"
+            onClick={runOcr}
+            disabled={ocrLoading || !imagePath.trim()}
+          >
+            {ocrLoading ? '…' : 'OCR 実行'}
+          </button>
+        </div>
+
+        {ocrError && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 mb-2 text-red-300 text-xs break-all">
+            ❌ {ocrError}
+          </div>
+        )}
+
+        {ocrResult && (
+          <div className="space-y-2">
+            <div className="bg-slate-800 rounded-lg p-2">
+              <p className="text-slate-400 text-xs mb-1">認識テキスト (raw)</p>
+              <pre className="text-green-300 text-xs whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                {ocrResult.raw_text || '(空)'}
+              </pre>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-2">
+              <p className="text-slate-400 text-xs mb-1">行分割 ({ocrResult.lines.length} 行)</p>
+              <ul className="text-white text-xs space-y-0.5 max-h-20 overflow-y-auto">
+                {ocrResult.lines.map((l, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="text-slate-500 w-4 text-right">{i + 1}</span>
+                    <span>{l}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {['WIN', 'LOSE', 'ガチエリア', 'ガチヤグラ', 'ガチホコ', 'ガチアサリ'].map((kw) => {
+                const found = ocrResult.raw_text.toUpperCase().includes(kw.toUpperCase());
                 return (
                   <span
                     key={kw}
@@ -103,17 +219,16 @@ export function OcrDebugPanel() {
                     {found ? '✓' : '✗'} {kw}
                   </span>
                 );
-              }
-            )}
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ヒント */}
-      <p className="text-slate-600 text-xs mt-3 leading-relaxed">
-        PNG/BMP を絶対パスで入力 → Enter。<br />
-        ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
-      </p>
+        <p className="text-slate-600 text-xs mt-3 leading-relaxed">
+          PNG/BMP を絶対パスで入力 → Enter。<br />
+          ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
+        </p>
+      </section>
     </div>
   );
 }

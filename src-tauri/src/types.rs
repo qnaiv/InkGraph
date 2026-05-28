@@ -89,3 +89,22 @@ pub struct OcrTestResult {
     pub raw_text: String,
     pub lines: Vec<String>,
 }
+
+/// debug_capture コマンドの診断結果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureDebugResult {
+    pub frame_w: u32,
+    pub frame_h: u32,
+    /// WIN_ROI を OCR した生テキスト (大文字正規化済み)
+    pub win_roi_text: String,
+    /// "WIN" テキストが見つかったか
+    pub win_text_found: bool,
+    /// WIN パネル側の黄色矢印ピクセル数
+    pub yellow_win_px: u32,
+    /// LOSE パネル側の黄色矢印ピクセル数
+    pub yellow_lose_px: u32,
+    /// 黄色ピクセルの y 重心 (0.0–1.0)
+    pub centroid_y: f32,
+    /// 判定サマリー文字列
+    pub detection_summary: String,
+}

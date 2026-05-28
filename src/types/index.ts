@@ -43,6 +43,17 @@ export interface CaptureStatusPayload {
   window_title: string | null;
 }
 
+export interface CaptureDebugResult {
+  frame_w: number;
+  frame_h: number;
+  win_roi_text: string;
+  win_text_found: boolean;
+  yellow_win_px: number;
+  yellow_lose_px: number;
+  centroid_y: number;
+  detection_summary: string;
+}
+
 export interface XpDataPoint {
   played_at: string;
   xp_after: number;

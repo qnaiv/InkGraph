@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
-    types::{CaptureStatusPayload, OcrTestResult, WindowInfo},
+    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo},
 };
 
 // ---------------------------------------------------------------------------
@@ -74,6 +74,30 @@ pub async fn start_capture(
 
     *state.capture_task.lock().await = Some(handle);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// デバッグキャプチャコマンド
+// ---------------------------------------------------------------------------
+
+/// 指定ウィンドウから 1 フレームだけ取得して検知パイプラインの診断情報を返す。
+/// リザルト画面を表示した状態で呼ぶと各ステップの通過状況が確認できる。
+#[tauri::command]
+pub async fn debug_capture(hwnd: u64) -> Result<CaptureDebugResult, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::{capture::WindowCaptureSession, detector::debug_detect_frame};
+        let session = tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd))
+            .map_err(|e| format!("WGC session failed: {e}"))?;
+        let frame = tokio::task::block_in_place(|| session.get_frame())
+            .map_err(|e| format!("get_frame failed: {e}"))?;
+        debug_detect_frame(&frame).map_err(|e| format!("debug_detect failed: {e}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = hwnd;
+        Err("debug_capture は Windows 専用です".to_string())
+    }
 }
 
 /// キャプチャを停止する。

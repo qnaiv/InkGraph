@@ -16,6 +16,45 @@ use anyhow::Result;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
+// デバッグ診断
+// ---------------------------------------------------------------------------
+
+/// フレームに対して検知パイプラインを一度だけ実行し、診断情報を返す。
+/// クールダウンなし・副作用なし。
+pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::CaptureDebugResult> {
+    let win_roi_text = ocr_roi(frame, &WIN_ROI, "en-US")
+        .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
+    let win_text_found = win_roi_text.contains("WIN");
+    let (yellow_win_px, yellow_lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
+
+    let detection_summary = if win_text_found {
+        if yellow_win_px >= MIN_YELLOW_PIXELS {
+            format!("WIN (win_px={yellow_win_px})")
+        } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
+            format!("LOSE (lose_px={yellow_lose_px})")
+        } else {
+            format!(
+                "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS})"
+            )
+        }
+    } else {
+        let preview: String = win_roi_text.chars().take(60).collect();
+        format!("NOT_DETECTED — WIN テキスト未検出 (ocr={preview:?})")
+    };
+
+    Ok(crate::types::CaptureDebugResult {
+        frame_w: frame.width,
+        frame_h: frame.height,
+        win_roi_text,
+        win_text_found,
+        yellow_win_px,
+        yellow_lose_px,
+        centroid_y,
+        detection_summary,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // ROI 定義 (16:9 フレームに対する比率)
 // ---------------------------------------------------------------------------
 //

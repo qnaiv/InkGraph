@@ -12,6 +12,7 @@ pub mod types;
 
 use state::AppState;
 use commands::{
+    debug_capture,
     list_windows,
     start_capture,
     stop_capture,
@@ -48,6 +49,7 @@ pub fn run() {
             list_windows,
             start_capture,
             stop_capture,
+            debug_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running IkaVision XP");
