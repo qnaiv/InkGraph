@@ -1,4 +1,4 @@
-// IkaVision XP — 試合カード
+// IkaVision XP — 試合カード (コンパクト行 / 展開で編集)
 
 import { useState } from 'react';
 import type { Match } from '../types';
@@ -13,6 +13,7 @@ interface MatchCardProps {
 }
 
 export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }: MatchCardProps) {
+  const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState(match.note ?? '');
   const [noteEditing, setNoteEditing] = useState(false);
 
@@ -23,6 +24,17 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
     minute: '2-digit',
   });
 
+  const kda = [
+    match.kill_count  != null ? `${match.kill_count}K`  : null,
+    match.assist_count != null ? `${match.assist_count}A` : null,
+    match.death_count != null ? `${match.death_count}D`  : null,
+  ].filter(Boolean).join('/');
+
+  const handleNoteBlur = () => {
+    setNoteEditing(false);
+    if (note !== (match.note ?? '')) onUpdateNote(match.id, note);
+  };
+
   const handleTagToggle = (tag: string) => {
     const next = match.tags.includes(tag)
       ? match.tags.filter((t) => t !== tag)
@@ -30,99 +42,75 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
     onUpdateTags(match.id, next);
   };
 
-  const handleNoteBlur = () => {
-    setNoteEditing(false);
-    if (note !== (match.note ?? '')) {
-      onUpdateNote(match.id, note);
-    }
-  };
-
   return (
-    <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
-      {/* ヘッダー行 */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span
-            className={`text-xs font-bold px-2 py-0.5 rounded ${
-              match.result === 'win'
-                ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-                : 'bg-red-500/20 text-red-400 border border-red-500/40'
-            }`}
-          >
-            {match.result === 'win' ? 'WIN' : 'LOSE'}
-          </span>
-          <span className="text-xs text-slate-400">{dateStr}</span>
-        </div>
+    <div className="border-b border-slate-700/50 last:border-0">
+      {/* コンパクト行 */}
+      <button
+        className="w-full flex items-center gap-1.5 px-1 py-1.5 text-left hover:bg-slate-700/30 transition-colors rounded"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {/* WIN / LOSE */}
+        <span className={`shrink-0 text-[10px] font-bold w-9 text-center py-0.5 rounded ${
+          match.result === 'win'
+            ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+            : 'bg-red-500/20 text-red-400 border border-red-500/40'
+        }`}>
+          {match.result === 'win' ? 'WIN' : 'LOSE'}
+        </span>
+
+        {/* 日時 */}
+        <span className="shrink-0 text-[10px] text-slate-500 w-[68px]">{dateStr}</span>
+
+        {/* ルール + ステージ */}
+        <span className="flex-1 text-xs text-slate-300 truncate">
+          {[match.rule, match.stage].filter(Boolean).join(' ')}
+        </span>
+
+        {/* KDA */}
+        {kda && (
+          <span className="shrink-0 text-[10px] text-slate-400 font-mono">{kda}</span>
+        )}
+
+        {/* XP */}
         {match.xp_after != null && (
-          <span className="text-sm font-mono text-indigo-300">
-            {match.xp_after.toFixed(1)} XP
+          <span className="shrink-0 text-[10px] font-mono text-indigo-300 w-14 text-right">
+            {match.xp_after.toFixed(1)}
           </span>
         )}
-      </div>
 
-      {/* ルール / ステージ */}
-      <div className="flex items-center gap-2 text-xs">
-        {match.rule && (
-          <span className="bg-slate-700 text-slate-300 px-2 py-0.5 rounded">
-            {match.rule}
-          </span>
-        )}
-        {match.stage && (
-          <span className="text-slate-400">{match.stage}</span>
-        )}
-      </div>
+        {/* 展開アイコン */}
+        <span className="shrink-0 text-slate-600 text-[10px] w-3 text-center">
+          {expanded ? '▲' : '▼'}
+        </span>
+      </button>
 
-      {/* KDA */}
-      {(match.kill_count != null || match.death_count != null) && (
-        <div className="flex items-center gap-3 text-xs text-slate-300">
-          {match.kill_count != null && (
-            <span>
-              <span className="text-green-400 font-bold">{match.kill_count}</span>
-              <span className="text-slate-500"> K</span>
-            </span>
-          )}
-          {match.assist_count != null && (
-            <span>
-              <span className="text-blue-400 font-bold">{match.assist_count}</span>
-              <span className="text-slate-500"> A</span>
-            </span>
-          )}
-          {match.death_count != null && (
-            <span>
-              <span className="text-red-400 font-bold">{match.death_count}</span>
-              <span className="text-slate-500"> D</span>
-            </span>
+      {/* 展開セクション: ブキ / タグ / メモ */}
+      {expanded && (
+        <div className="px-2 pb-3 pt-1 space-y-2 border-t border-slate-700/40">
+          <WeaponPicker
+            currentWeapon={match.weapon}
+            onSelect={(weapon) => onUpdateWeapon(match.id, weapon)}
+          />
+          <TagInput tags={match.tags} onToggle={handleTagToggle} />
+          {noteEditing ? (
+            <textarea
+              className="w-full bg-slate-700 text-white placeholder-slate-400 rounded-lg px-2 py-1.5 text-xs resize-none outline-none focus:ring-1 focus:ring-indigo-500"
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onBlur={handleNoteBlur}
+              placeholder="振り返りメモを入力..."
+              autoFocus
+            />
+          ) : (
+            <button
+              className="text-left text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              onClick={() => setNoteEditing(true)}
+            >
+              {note || '📝 メモを追加...'}
+            </button>
           )}
         </div>
-      )}
-
-      {/* ブキ選択 */}
-      <WeaponPicker
-        currentWeapon={match.weapon}
-        onSelect={(weapon) => onUpdateWeapon(match.id, weapon)}
-      />
-
-      {/* 反省タグ */}
-      <TagInput tags={match.tags} onToggle={handleTagToggle} />
-
-      {/* メモ */}
-      {noteEditing ? (
-        <textarea
-          className="w-full bg-slate-700 text-white placeholder-slate-400 rounded-lg px-2 py-1.5 text-xs resize-none outline-none focus:ring-1 focus:ring-indigo-500"
-          rows={2}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          onBlur={handleNoteBlur}
-          placeholder="振り返りメモを入力..."
-          autoFocus
-        />
-      ) : (
-        <button
-          className="text-left text-xs text-slate-500 hover:text-slate-300 transition-colors"
-          onClick={() => setNoteEditing(true)}
-        >
-          {note || '📝 メモを追加...'}
-        </button>
       )}
     </div>
   );

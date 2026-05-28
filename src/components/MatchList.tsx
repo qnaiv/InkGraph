@@ -36,7 +36,7 @@ export function MatchList({
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col">
       {matches.map((match) => (
         <MatchCard
           key={match.id}

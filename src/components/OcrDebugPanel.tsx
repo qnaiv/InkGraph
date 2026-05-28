@@ -6,6 +6,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { OcrTestResult, CaptureDebugResult, WindowInfo } from '../types';
 
 export function OcrDebugPanel() {
+  const [minimized, setMinimized] = useState(true);
+
   // ── ファイル OCR ──────────────────────────────────────────────────────────
   const [imagePath, setImagePath] = useState('');
   const [ocrResult, setOcrResult] = useState<OcrTestResult | null>(null);
@@ -56,11 +58,27 @@ export function OcrDebugPanel() {
     }
   };
 
+  if (minimized) {
+    return (
+      <button
+        className="fixed bottom-4 left-4 bg-slate-900 border border-amber-500/50 rounded-lg px-3 py-1.5 text-amber-400 text-xs font-bold shadow-xl z-50 hover:bg-slate-800 transition-colors"
+        onClick={() => setMinimized(false)}
+      >
+        🔬 DEBUG
+      </button>
+    );
+  }
+
   return (
-    <div className="fixed bottom-4 right-4 w-[420px] bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm space-y-5 max-h-[90vh] overflow-y-auto">
+    <div className="fixed bottom-4 left-4 w-[420px] bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm space-y-5 max-h-[90vh] overflow-y-auto">
       <div className="flex items-center justify-between">
         <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
-        <span className="text-slate-500 text-xs">開発モード専用</span>
+        <button
+          className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+          onClick={() => setMinimized(true)}
+        >
+          最小化
+        </button>
       </div>
 
       {/* ── ① ライブキャプチャ診断 ─────────────────────────────────────── */}
