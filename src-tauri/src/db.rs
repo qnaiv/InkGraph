@@ -30,7 +30,7 @@ pub fn new_in_progress_match() -> Match {
     }
 }
 
-/// WinRT OCR の抽出結果から Match レコードを構築するヘルパー。
+/// OCR / YOLO 抽出結果から Match レコードを構築するヘルパー。
 ///
 /// `id` が `Some` の場合は既存の "in_progress" レコードを上書きするため
 /// 同じ UUID を使い回す。`None` の場合は新規 UUID を発行する。
@@ -43,10 +43,12 @@ pub fn new_match_from_ocr(
     xp_after: Option<f64>,
     rule: Option<String>,
     stage: Option<String>,
+    mode: Option<String>,
 ) -> Match {
     Match {
         id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         played_at: Utc::now().to_rfc3339(),
+        mode,
         rule,
         stage,
         weapon: None,
@@ -77,15 +79,17 @@ mod tests {
     #[test]
     fn test_new_match_reuses_id() {
         let id = "existing-id".to_string();
-        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(2341.5), None, None);
+        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(2341.5), None, None, Some("Xマッチ".to_string()));
         assert_eq!(m.id, id);
         assert_eq!(m.result, "win");
+        assert_eq!(m.mode.as_deref(), Some("Xマッチ"));
     }
 
     #[test]
     fn test_new_match_generates_id_when_none() {
-        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None);
+        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None, None);
         assert!(!m.id.is_empty());
         assert_eq!(m.result, "lose");
+        assert!(m.mode.is_none());
     }
 }

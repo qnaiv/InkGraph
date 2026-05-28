@@ -1,83 +1,122 @@
-use crate::{
-    capture::CapturedFrame,
-    detector::crop_bgra,
-    ocr::{ocr_from_bgra, preprocess_bgra},
-    types::ExtractedMatchData,
-};
 /// InkGraph — データ抽出モジュール
 ///
-/// リザルト画面から各 ROI をクロップして OCR し、
-/// キル・デス・XP・ルール・ステージを数値/文字列に変換します。
+/// 2つの抽出パスを提供する:
+///
+///   1. YOLO パス (extract_from_yolo_detections):
+///      YOLO が返した BBox を元にクロップ → 白文字抽出 → WinRT OCR
+///      モード (Xマッチ/ナワバリ等) も抽出できる
+///
+///   2. ピクセルフォールバックパス (extract_match_data):
+///      固定 ROI 座標でクロップ → WinRT OCR
+///      YOLO モデルが未配置の場合に使用する
+
+use crate::{
+    capture::CapturedFrame,
+    detector::{crop_bgra, Detection, YoloClass, YoloDetector, Roi},
+    ocr::{ocr_from_bgra, preprocess_bgra},
+    preprocess::extract_white_text,
+    types::ExtractedMatchData,
+};
 use anyhow::Result;
 
 // ---------------------------------------------------------------------------
-// ROI 定義
+// YOLO パス
 // ---------------------------------------------------------------------------
-//
-// 全座標は 16:9 フレームに対する比率で定義します。
-// スクリーンショット実測値 (バンカラマッチ 1456×816, 2026-05-27)。
-// Xマッチでも rule/stage/WIN LOSE の配置は同じです。
-// KDA・XP の ROI は Xマッチリザルト画面のスクショで要調整。
 
-use crate::detector::Roi;
+/// YOLO の検出結果を使ってリザルト画面から全データを抽出する。
+///
+/// `result_class` は `YoloClass::ResultWin` または `YoloClass::ResultLose`。
+/// BBox が検出されなかった項目は `None` を返す (OCR 失敗扱い)。
+/// 呼び出し元は `tokio::task::block_in_place` でラップすること (OCR がブロッキング)。
+pub fn extract_from_yolo_detections(
+    frame:        &CapturedFrame,
+    detections:   &[Detection],
+    result_class: YoloClass,
+) -> Result<ExtractedMatchData> {
+    let result = match result_class {
+        YoloClass::ResultWin  => "win",
+        YoloClass::ResultLose => "lose",
+        _                     => "lose",
+    };
 
-// ── ルール・ステージ (実測値: 1456×816 Xマッチスクショ 2026-05-28) ──────
-// リザルト画面上部に「ガチエリア  タラポートショッピングパーク」のように並ぶ。
+    // ルール・ステージ・モード: BBox クロップ → 白文字抽出 → OCR → 正規化
+    let rule  = extract_ocr_from_class(frame, detections, YoloClass::RuleText,  "ja-JP")
+        .and_then(|t| normalize_rule(&t));
+    let stage = extract_ocr_from_class(frame, detections, YoloClass::StageText, "ja-JP")
+        .and_then(|t| normalize_stage(&t));
+    let mode  = extract_ocr_from_class(frame, detections, YoloClass::ModeText,  "ja-JP")
+        .and_then(|t| normalize_mode(&t));
 
-/// ルール名: 実測 x≈668/1456=0.459, w≈135px
+    // KDA: PlayerKda BBox の y 中心 → 既存の固定列位置でクロップ → OCR
+    let kda_y = YoloDetector::best_detection(detections, YoloClass::PlayerKda)
+        .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
+        .unwrap_or(0.5);
+    let (kill_count, assist_count, death_count) = extract_kda(frame, kda_y)?;
+
+    Ok(ExtractedMatchData {
+        result: result.to_string(),
+        mode,
+        kill_count,
+        assist_count,
+        death_count,
+        xp_after: None, // フェーズ2 (Xパワー画面) で実装
+        rule,
+        stage,
+    })
+}
+
+/// 指定クラスの最高確信度 BBox をクロップして白文字 OCR し生テキストを返す。
+fn extract_ocr_from_class(
+    frame:      &CapturedFrame,
+    detections: &[Detection],
+    class:      YoloClass,
+    lang:       &str,
+) -> Option<String> {
+    let det = YoloDetector::best_detection(detections, class)?;
+
+    let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
+    let y1 = (det.bbox.y1 * frame.height as f32) as u32;
+    let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
+    let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
+    let w  = x2.saturating_sub(x1).max(1);
+    let h  = y2.saturating_sub(y1).max(1);
+
+    let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
+    let preprocessed = extract_white_text(&cropped, w, h);
+    let text = ocr_from_bgra(&preprocessed, w, h, Some(lang)).ok()?.text;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
+}
+
+// ---------------------------------------------------------------------------
+// ピクセルフォールバックパス (固定 ROI OCR)
+// ---------------------------------------------------------------------------
+
 const RULE_ROI: Roi = Roi {
-    x_ratio: 0.450,
-    y_ratio: 0.060,
-    w_ratio: 0.120,
-    h_ratio: 0.058,
+    x_ratio: 0.450, y_ratio: 0.060, w_ratio: 0.120, h_ratio: 0.058,
 };
-
-/// ステージ名: 実測 x≈820/1456=0.563, w≈330px
 const STAGE_ROI: Roi = Roi {
-    x_ratio: 0.545,
-    y_ratio: 0.060,
-    w_ratio: 0.240,
-    h_ratio: 0.058,
+    x_ratio: 0.545, y_ratio: 0.060, w_ratio: 0.240, h_ratio: 0.058,
 };
-
-// ── KDA 列 x 座標 (実測値: 1456×816 Xマッチスクショ 2026-05-28) ────────
-// Splatoon3 リザルトパネルの列構成: [キル] [デス] [スペシャル]
-// y 座標は矢印の y 重心から動的に決める (プレイヤー行は 1〜4 で変わるため)。
-// ExtractedMatchData の kill / assist / death フィールドに格納する。
-
-const KILL_COL_X:  f32 = 0.758; // x≈1104/1456
-const DEATH_COL_X: f32 = 0.822; // x≈1197/1456
-const SPEC_COL_X:  f32 = 0.863; // x≈1257/1456
-const KDA_COL_W:   f32 = 0.048; // 幅≈70px
-const KDA_ROW_H:   f32 = 0.052; // 高さ≈42px
-
-// ── XP (Xマッチ専用・別画面) ─────────────────────────────────────────
-// Xパワーは試合リザルトパネルではなく個人サマリ画面に表示される。
-// TODO: 実際の表示画面スクショで座標を確定する
-
-/// X パワー表示領域 (Xマッチ専用)
 const XP_ROI: Roi = Roi {
-    x_ratio: 0.455,
-    y_ratio: 0.185,
-    w_ratio: 0.180,
-    h_ratio: 0.060,
+    x_ratio: 0.455, y_ratio: 0.185, w_ratio: 0.180, h_ratio: 0.060,
 };
 
-// ---------------------------------------------------------------------------
-// 抽出処理
-// ---------------------------------------------------------------------------
-
-/// リザルト画面フレームから全データを抽出する。
-/// `arrow_y_ratio`: 黄色矢印の y 重心比率 (detector から受け取る)。
-/// プレイヤーが何行目にいるかが毎試合変わるため、この値で KDA 行を動的に特定する。
-pub fn extract_match_data(frame: &CapturedFrame, result: &str, arrow_y_ratio: f32) -> Result<ExtractedMatchData> {
+/// 固定 ROI パス: 黄色矢印の y 重心を行基準として KDA などを OCR する。
+/// (YOLO モデル未配置時のフォールバック)
+pub fn extract_match_data(
+    frame:         &CapturedFrame,
+    result:        &str,
+    arrow_y_ratio: f32,
+) -> Result<ExtractedMatchData> {
     let (kill_count, assist_count, death_count) = extract_kda(frame, arrow_y_ratio)?;
     let xp_after = extract_xp(frame)?;
-    let rule = extract_rule(frame);
+    let rule  = extract_rule(frame);
     let stage = extract_stage(frame);
 
     Ok(ExtractedMatchData {
         result: result.to_string(),
+        mode: None, // 固定 ROI パスではモード取得なし
         kill_count,
         assist_count,
         death_count,
@@ -87,70 +126,55 @@ pub fn extract_match_data(frame: &CapturedFrame, result: &str, arrow_y_ratio: f3
     })
 }
 
-/// KDA を抽出する。
-/// `arrow_y_ratio` から y_top を計算し、プレイヤー行の KDA 列を読む。
-/// 列の意味: kill=キル / assist=デス / death=スペシャル (DB スキーマ名に合わせて格納)
-fn extract_kda(frame: &CapturedFrame, arrow_y_ratio: f32) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
-    // 矢印重心を行の中央とみなし、上下 KDA_ROW_H/2 の範囲を切り出す
-    let y_ratio = (arrow_y_ratio - KDA_ROW_H / 2.0).max(0.0);
+// ---------------------------------------------------------------------------
+// 共通 KDA 抽出 (YOLO / 固定 ROI 両パスで使用)
+// ---------------------------------------------------------------------------
 
-    let kill_roi = Roi { x_ratio: KILL_COL_X,  y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
-    let deat_roi = Roi { x_ratio: DEATH_COL_X, y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
-    let spec_roi = Roi { x_ratio: SPEC_COL_X,  y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+const KILL_COL_X:  f32 = 0.758;
+const DEATH_COL_X: f32 = 0.822;
+const SPEC_COL_X:  f32 = 0.863;
+const KDA_COL_W:   f32 = 0.048;
+const KDA_ROW_H:   f32 = 0.052;
 
-    let kill  = extract_integer_roi(frame, &kill_roi, "en-US");
-    let death = extract_integer_roi(frame, &deat_roi, "en-US");
-    let spec  = extract_integer_roi(frame, &spec_roi, "en-US");
-
-    Ok((kill, death, spec))
+/// `y_ratio` はプレイヤー行の y 中心 (0.0–1.0)。
+fn extract_kda(
+    frame:   &CapturedFrame,
+    y_ratio: f32,
+) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
+    let y_top = (y_ratio - KDA_ROW_H / 2.0).max(0.0);
+    let kill_roi = Roi { x_ratio: KILL_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+    let deat_roi = Roi { x_ratio: DEATH_COL_X, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+    let spec_roi = Roi { x_ratio: SPEC_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+    Ok((
+        extract_integer_roi(frame, &kill_roi,  "en-US"),
+        extract_integer_roi(frame, &deat_roi,  "en-US"),
+        extract_integer_roi(frame, &spec_roi,  "en-US"),
+    ))
 }
 
-/// XP を抽出する（小数点以下1桁の float）
 fn extract_xp(frame: &CapturedFrame) -> Result<Option<f64>> {
     let (x, y, w, h) = XP_ROI.to_pixels(frame.width, frame.height);
     let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-
-    let ocr_result = ocr_from_bgra(&roi, w, h, Some("en-US"))?;
-    let cleaned = clean_numeric_text(&ocr_result.text);
-
-    // XP は "2341.5" や "2341" の形式
-    Ok(cleaned.parse::<f64>().ok())
+    let text = ocr_from_bgra(&roi, w, h, Some("en-US"))?.text;
+    Ok(clean_numeric_text(&text).parse::<f64>().ok())
 }
 
-/// ルール名を抽出する（前処理あり）
 fn extract_rule(frame: &CapturedFrame) -> Option<String> {
     let (x, y, w, h) = RULE_ROI.to_pixels(frame.width, frame.height);
     let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-
-    // 動く背景対策: 2値化前処理
     let preprocessed = preprocess_bgra(&roi, w, h);
-
-    // ja-JP で日本語テキストを読む
-    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
-        .ok()
-        .map(|r| r.text.trim().to_string())?;
-
-    normalize_rule(&text)
+    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP")).ok()?.text;
+    normalize_rule(text.trim())
 }
 
-/// ステージ名を抽出する（前処理あり）
 fn extract_stage(frame: &CapturedFrame) -> Option<String> {
     let (x, y, w, h) = STAGE_ROI.to_pixels(frame.width, frame.height);
     let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-
     let preprocessed = preprocess_bgra(&roi, w, h);
-    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
-        .ok()
-        .map(|r| r.text.trim().to_string())?;
-
-    normalize_stage(&text)
+    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP")).ok()?.text;
+    normalize_stage(text.trim())
 }
 
-// ---------------------------------------------------------------------------
-// ユーティリティ
-// ---------------------------------------------------------------------------
-
-/// ROI を切り出して整数値を OCR で取得する
 fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Option<i64> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
     let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
@@ -158,31 +182,21 @@ fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Option<i
     clean_numeric_text(&text).parse::<i64>().ok()
 }
 
-/// OCR テキストから数字以外を除去する
 fn clean_numeric_text(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
-        .collect()
+    text.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect()
 }
 
-/// ルール名の正規化 (OCR 誤認識対策)
+// ---------------------------------------------------------------------------
+// 正規化
+// ---------------------------------------------------------------------------
+
 pub fn normalize_rule(raw: &str) -> Option<String> {
     let candidates: &[(&str, &[&str])] = &[
-        (
-            "ガチエリア",
-            &["ガチエリア", "エリア", "AREA", "SPLAT ZONES"],
-        ),
-        (
-            "ガチヤグラ",
-            &["ガチヤグラ", "ヤグラ", "TOWER", "TOWER CONTROL"],
-        ),
-        ("ガチホコ", &["ガチホコ", "ホコ", "RAINMAKER"]),
-        (
-            "ガチアサリ",
-            &["ガチアサリ", "アサリ", "CLAM", "CLAM BLITZ"],
-        ),
+        ("ガチエリア",  &["ガチエリア", "エリア", "AREA", "SPLAT ZONES"]),
+        ("ガチヤグラ",  &["ガチヤグラ", "ヤグラ", "TOWER", "TOWER CONTROL"]),
+        ("ガチホコ",    &["ガチホコ", "ホコ", "RAINMAKER"]),
+        ("ガチアサリ",  &["ガチアサリ", "アサリ", "CLAM", "CLAM BLITZ"]),
     ];
-
     let upper = raw.to_uppercase();
     for (canonical, aliases) in candidates {
         for alias in *aliases {
@@ -191,64 +205,49 @@ pub fn normalize_rule(raw: &str) -> Option<String> {
             }
         }
     }
-    if raw.trim().is_empty() {
-        None
-    } else {
-        Some(raw.trim().to_string())
-    }
+    if raw.trim().is_empty() { None } else { Some(raw.trim().to_string()) }
 }
 
-/// ステージ名の正規化
 pub fn normalize_stage(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
-    // 空文字チェックを先に行う。
-    // これをしないと stage.contains("") が常に true になり
-    // リストの先頭ステージが必ず返ってしまうバグが起きる。
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // スプラトゥーン3 全ステージ (2024-2026 時点)
+    if trimmed.is_empty() { return None; }
     let stages = [
-        "ユノハナ大渓谷",
-        "ゴンズイ地区",
-        "ヤガラ市場",
-        "マテガイ放水路",
-        "ナメロウ金属",
-        "ナンプラー遺跡",
-        "クサヤ温泉",
-        "ヒラメが丘団地",
-        "マサバ海峡大橋",
-        "スメーシーワールド",
-        "キンメダイ美術館",
-        "タラポートショッピングパーク",
-        "バイガイ亭",
-        "海女美術大学",
-        "チョウザメ造船",
-        "ザトウマーケット",
-        "リュウグウターミナル",
-        "オヒョウ海運",
-        "カジキ空港",
-        "バンカラ街",
-        "冷凍倉庫",
-        "ネギトロ炭鉱",
-        "ショッツル鉱山",
+        "ユノハナ大渓谷", "ゴンズイ地区", "ヤガラ市場", "マテガイ放水路",
+        "ナメロウ金属", "ナンプラー遺跡", "クサヤ温泉", "ヒラメが丘団地",
+        "マサバ海峡大橋", "スメーシーワールド", "キンメダイ美術館",
+        "タラポートショッピングパーク", "バイガイ亭", "海女美術大学",
+        "チョウザメ造船", "ザトウマーケット", "リュウグウターミナル",
+        "オヒョウ海運", "カジキ空港", "バンカラ街", "冷凍倉庫",
+        "ネギトロ炭鉱", "ショッツル鉱山",
     ];
-
     for stage in &stages {
-        // OCR テキストにステージ名が含まれる (ゴミ文字が混入しても正しく拾える)
-        if trimmed.contains(stage) {
-            return Some(stage.to_string());
-        }
-        // OCR が短く切れた場合の部分一致 (4文字以上のみ、空文字誤検知防止)
-        let char_count = trimmed.chars().count();
-        if char_count >= 4 && stage.contains(trimmed) {
+        if trimmed.contains(stage) { return Some(stage.to_string()); }
+        if trimmed.chars().count() >= 4 && stage.contains(trimmed) {
             return Some(stage.to_string());
         }
     }
-
-    // どのステージとも一致しない = OCR ゴミ文字列 → 保存しない
     None
+}
+
+pub fn normalize_mode(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() { return None; }
+    let candidates: &[(&str, &[&str])] = &[
+        ("Xマッチ",                   &["Xマッチ", "X BATTLE", "Xバトル", "X MATCH"]),
+        ("バンカラマッチ(チャレンジ)", &["チャレンジ", "CHALLENGE", "ANARCHY OPEN"]),
+        ("バンカラマッチ(オープン)",   &["オープン", "OPEN", "ANARCHY BATTLE", "バンカラ"]),
+        ("ナワバリバトル",             &["ナワバリ", "TURF WAR"]),
+        ("サーモンラン",               &["サーモン", "SALMON"]),
+    ];
+    let upper = raw.to_uppercase();
+    for (canonical, aliases) in candidates {
+        for alias in *aliases {
+            if upper.contains(&alias.to_uppercase()) || raw.contains(alias) {
+                return Some(canonical.to_string());
+            }
+        }
+    }
+    Some(trimmed.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -262,28 +261,34 @@ mod tests {
     #[test]
     fn test_normalize_rule() {
         assert_eq!(normalize_rule("ガチエリア"), Some("ガチエリア".to_string()));
-        assert_eq!(normalize_rule("エリア"), Some("ガチエリア".to_string()));
-        assert_eq!(normalize_rule("AREA"), Some("ガチエリア".to_string()));
+        assert_eq!(normalize_rule("エリア"),     Some("ガチエリア".to_string()));
+        assert_eq!(normalize_rule("AREA"),       Some("ガチエリア".to_string()));
         assert_eq!(normalize_rule("ガチヤグラ"), Some("ガチヤグラ".to_string()));
-        assert_eq!(normalize_rule("RAINMAKER"), Some("ガチホコ".to_string()));
+        assert_eq!(normalize_rule("RAINMAKER"),  Some("ガチホコ".to_string()));
     }
 
     #[test]
     fn test_normalize_stage() {
-        assert_eq!(
-            normalize_stage("マテガイ放水路"),
-            Some("マテガイ放水路".to_string())
-        );
-        assert_eq!(
-            normalize_stage("ナメロウ金属"),
-            Some("ナメロウ金属".to_string())
-        );
+        assert_eq!(normalize_stage("マテガイ放水路"), Some("マテガイ放水路".to_string()));
+        assert_eq!(normalize_stage("ナメロウ金属"),   Some("ナメロウ金属".to_string()));
+        assert_eq!(normalize_stage(""),               None);
+    }
+
+    #[test]
+    fn test_normalize_mode() {
+        assert_eq!(normalize_mode("Xマッチ"),       Some("Xマッチ".to_string()));
+        assert_eq!(normalize_mode("X BATTLE"),       Some("Xマッチ".to_string()));
+        assert_eq!(normalize_mode("チャレンジ"),     Some("バンカラマッチ(チャレンジ)".to_string()));
+        assert_eq!(normalize_mode("ANARCHY BATTLE"), Some("バンカラマッチ(オープン)".to_string()));
+        assert_eq!(normalize_mode("ナワバリ"),       Some("ナワバリバトル".to_string()));
+        assert_eq!(normalize_mode("TURF WAR"),       Some("ナワバリバトル".to_string()));
+        assert_eq!(normalize_mode(""),               None);
     }
 
     #[test]
     fn test_clean_numeric_text() {
         assert_eq!(clean_numeric_text("2341.5 XP"), "2341.5");
-        assert_eq!(clean_numeric_text("Kill: 5"), "5");
-        assert_eq!(clean_numeric_text("abc"), "");
+        assert_eq!(clean_numeric_text("Kill: 5"),   "5");
+        assert_eq!(clean_numeric_text("abc"),        "");
     }
 }

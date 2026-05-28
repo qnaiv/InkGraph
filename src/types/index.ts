@@ -3,6 +3,7 @@
 export interface Match {
   id: string;
   played_at: string;
+  mode: string | null;  // "Xマッチ" / "バンカラマッチ(チャレンジ)" / "ナワバリバトル" 等
   rule: string | null;
   stage: string | null;
   weapon: string | null;

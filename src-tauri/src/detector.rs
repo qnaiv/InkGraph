@@ -129,6 +129,18 @@ impl ResultDetector {
         Self { phase: DetectorPhase::WaitingForBattle }
     }
 
+    /// バトル開始を待機中か (YOLO パスで利用)
+    pub fn is_waiting(&self) -> bool { self.phase == DetectorPhase::WaitingForBattle }
+
+    /// バトル中 (リザルト待ち) か (YOLO パスで利用)
+    pub fn is_in_game(&self) -> bool { self.phase == DetectorPhase::InGame }
+
+    /// 強制的に WaitingForBattle へリセット (YOLO がリザルト検知した後に呼ぶ)
+    pub fn reset_to_waiting(&mut self) {
+        self.phase = DetectorPhase::WaitingForBattle;
+        log::debug!("[detector] reset → WaitingForBattle");
+    }
+
     /// 2フェーズ検知。detect() は Phase 1 で blocking OCR を呼ぶため、
     /// 呼び出し元は tokio::task::block_in_place でラップすること。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {

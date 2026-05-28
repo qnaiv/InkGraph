@@ -31,7 +31,7 @@ export async function selectMatches(
 ): Promise<RawMatch[]> {
   const db = await getDb();
   const cols = `
-    id, played_at, rule, stage, weapon, result,
+    id, played_at, mode, rule, stage, weapon, result,
     kill_count, assist_count, death_count, xp_after,
     tags, note, created_at, updated_at
   `;
@@ -56,12 +56,13 @@ export async function insertMatch(m: RawMatch): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO matches
-       (id, played_at, rule, stage, weapon, result,
+       (id, played_at, mode, rule, stage, weapon, result,
         kill_count, assist_count, death_count, xp_after, tags, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       m.id,
       m.played_at,
+      m.mode   ?? null,
       m.rule   ?? null,
       m.stage  ?? null,
       m.weapon ?? null,
@@ -88,12 +89,13 @@ export async function updateMatchResult(m: RawMatch): Promise<void> {
   const db = await getDb();
   const res = await db.execute(
     `UPDATE matches
-     SET result = $1, rule = $2, stage = $3,
-         kill_count = $4, assist_count = $5, death_count = $6, xp_after = $7,
+     SET result = $1, mode = $2, rule = $3, stage = $4,
+         kill_count = $5, assist_count = $6, death_count = $7, xp_after = $8,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = $8`,
+     WHERE id = $9`,
     [
       m.result,
+      m.mode          ?? null,
       m.rule          ?? null,
       m.stage         ?? null,
       m.kill_count    ?? null,
