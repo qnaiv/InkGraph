@@ -49,7 +49,8 @@ export interface CaptureDebugResult {
   battle_start_text: string;
   battle_start_found: boolean;
   dark_scroll_found: boolean;
-  grey_rows: number;
+  win_grey_rows: number;
+  lose_grey_rows: number;
   win_roi_text: string;
   win_text_found: boolean;
   yellow_win_px: number;

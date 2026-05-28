@@ -146,8 +146,10 @@ export function OcrDebugPanel() {
             <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
               <div className="flex justify-between">
                 <span className="text-slate-400">Phase 2: リザルト画面判定</span>
-                <span className={diagResult.grey_rows >= 4 ? 'text-green-400' : 'text-slate-500'}>
-                  グレー行 {diagResult.grey_rows}/8 {diagResult.grey_rows >= 4 ? '✓' : '✗'}
+                <span className={diagResult.win_grey_rows >= 2 && diagResult.lose_grey_rows >= 2 ? 'text-green-400' : 'text-slate-500'}>
+                  WIN側 {diagResult.win_grey_rows}/4 {diagResult.win_grey_rows >= 2 ? '✓' : '✗'}
+                  {' | '}
+                  LOSE側 {diagResult.lose_grey_rows}/4 {diagResult.lose_grey_rows >= 2 ? '✓' : '✗'}
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-1 mt-1">

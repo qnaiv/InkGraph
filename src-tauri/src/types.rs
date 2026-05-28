@@ -101,8 +101,10 @@ pub struct CaptureDebugResult {
     pub battle_start_found: bool,
     /// Phase 1: 暗い巻物ピクセルで検出したか
     pub dark_scroll_found: bool,
-    /// Phase 2: リザルト画面判定 — グレー行数 (8行中)
-    pub grey_rows: u32,
+    /// Phase 2: リザルト画面判定 — WIN 側グレー行数 (4行中)
+    pub win_grey_rows: u32,
+    /// Phase 2: リザルト画面判定 — LOSE 側グレー行数 (4行中)
+    pub lose_grey_rows: u32,
     /// Phase 2 参考: WIN_ROI OCR テキスト (大文字)
     pub win_roi_text: String,
     /// Phase 2 参考: WIN テキストが見つかったか

@@ -52,8 +52,9 @@ const MIN_YELLOW_PIXELS: u32 = 100;
 const GREY_LUMINANCE_MIN: u16 = 180;
 /// グレー行判定の彩度上限 (max_channel - min_channel)
 const GREY_SATURATION_MAX: u8 = 40;
-/// リザルト画面と判定するグレー行の最小数 (8行中)
-const RESULT_GREY_ROWS_MIN: u32 = 4;
+/// リザルト画面と判定するグレー行の最小数 (WIN 側 4行中 / LOSE 側 4行中それぞれ)
+/// 両サイドで ≥2 行必要とすることで、バナー画面の誤検知を防ぐ
+const RESULT_GREY_ROWS_MIN_PER_HALF: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Roi 構造体
@@ -161,10 +162,12 @@ impl ResultDetector {
             // Phase 2: リザルト画面検知
             // ------------------------------------------------------------------
             DetectorPhase::InGame => {
-                // リザルト画面の構造的確認: プレイヤー行が灰色背景で並んでいるか
-                // バナー画面 (彩度高い黄/橙) やゲーム中 (ゲーム映像) と区別できる
-                let grey_rows = count_grey_rows(frame);
-                if grey_rows < RESULT_GREY_ROWS_MIN {
+                // リザルト画面の構造的確認: WIN 側・LOSE 側それぞれで
+                // プレイヤー行がグレー背景で並んでいるか確認する。
+                // 両サイドで ≥2 行を要求することで、バトル開始直後の
+                // バナー画面 (WIN 側が暗い) での誤検知を完全に排除できる。
+                let (win_grey, lose_grey) = count_grey_rows(frame);
+                if win_grey < RESULT_GREY_ROWS_MIN_PER_HALF || lose_grey < RESULT_GREY_ROWS_MIN_PER_HALF {
                     return Ok(DetectionResult::NotDetected);
                 }
 
@@ -181,7 +184,7 @@ impl ResultDetector {
                     DetectionResult::Lose { arrow_y_ratio: centroid_y }
                 };
                 log::info!(
-                    "[detector] {:?} (grey_rows={grey_rows} win={win_px} lose={lose_px} y={centroid_y:.3})",
+                    "[detector] {:?} (win_grey={win_grey} lose_grey={lose_grey} win_px={win_px} lose_px={lose_px} y={centroid_y:.3})",
                     result.result_str()
                 );
                 Ok(result)
@@ -211,21 +214,22 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         .map(|t| t.to_uppercase())
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
     let win_text_found    = win_roi_text.contains("WIN");
-    let grey_rows         = count_grey_rows(frame);
-    let result_screen_ok  = grey_rows >= RESULT_GREY_ROWS_MIN;
+    let (win_grey_rows, lose_grey_rows) = count_grey_rows(frame);
+    let result_screen_ok  = win_grey_rows >= RESULT_GREY_ROWS_MIN_PER_HALF
+                         && lose_grey_rows >= RESULT_GREY_ROWS_MIN_PER_HALF;
     let (yellow_win_px, yellow_lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
 
     let detection_summary = if battle_start_found {
         let m = if dark_scroll_found { "暗巻物" } else { "OCR" };
         format!("Phase 1 ✓ バトル開始 ({m}) → InGame")
     } else if !result_screen_ok {
-        format!("Phase 2: NOT_RESULT_SCREEN (grey_rows={grey_rows}/{RESULT_GREY_ROWS_MIN})")
+        format!("Phase 2: NOT_RESULT_SCREEN (WIN側グレー={win_grey_rows}/4 LOSE側={lose_grey_rows}/4 最小{RESULT_GREY_ROWS_MIN_PER_HALF})")
     } else if yellow_win_px >= MIN_YELLOW_PIXELS {
-        format!("Phase 2 ✓ WIN (grey={grey_rows} win_px={yellow_win_px} y={centroid_y:.3})")
+        format!("Phase 2 ✓ WIN (WIN_grey={win_grey_rows} LOSE_grey={lose_grey_rows} win_px={yellow_win_px} y={centroid_y:.3})")
     } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
-        format!("Phase 2 ✓ LOSE (grey={grey_rows} lose_px={yellow_lose_px} y={centroid_y:.3})")
+        format!("Phase 2 ✓ LOSE (WIN_grey={win_grey_rows} LOSE_grey={lose_grey_rows} lose_px={yellow_lose_px} y={centroid_y:.3})")
     } else {
-        format!("Phase 2: NOT_DETECTED (grey={grey_rows} win={yellow_win_px} lose={yellow_lose_px})")
+        format!("Phase 2: NOT_DETECTED (WIN_grey={win_grey_rows} LOSE_grey={lose_grey_rows} win_px={yellow_win_px} lose_px={yellow_lose_px})")
     };
 
     Ok(crate::types::CaptureDebugResult {
@@ -236,7 +240,8 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         dark_scroll_found,
         win_roi_text,
         win_text_found,
-        grey_rows,
+        win_grey_rows,
+        lose_grey_rows,
         yellow_win_px,
         yellow_lose_px,
         centroid_y,
@@ -277,19 +282,23 @@ fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
     total > 0 && dark * 100 / total >= 25
 }
 
-/// リザルト画面のプレイヤー行 (8行) をグレー背景で検出する。
+/// リザルト画面のプレイヤー行をグレー背景で検出する。
 ///
-/// 各行で x = [0.55, 0.65, 0.75] の 3点をサンプリングし、
+/// WIN 側 4行・LOSE 側 4行を独立してカウントし `(win_grey, lose_grey)` で返す。
+/// 両サイドで ≥2 を要求することで、バトル開始直後バナー画面
+/// (WIN 側中央が暗い墨色 → win_grey=0) での誤検知を排除する。
+///
+/// 各行: x = [0.55, 0.65, 0.75] の 3点をサンプリングし、
 /// 輝度 ≥ 180 かつ 彩度 ≤ 40 のサンプルが 2点以上なら「グレー行」と判定。
-/// 戻り値: グレー行として認定された行数 (0–8)
-fn count_grey_rows(frame: &CapturedFrame) -> u32 {
-    // WIN 4行 (y=0.28–0.63) + LOSE 4行 (y=0.63–0.94) のセンター y 比率
-    const ROW_Y: [f32; 8] = [0.324, 0.411, 0.499, 0.586, 0.669, 0.746, 0.824, 0.901];
+fn count_grey_rows(frame: &CapturedFrame) -> (u32, u32) {
+    // WIN 側 4行 (リザルト画面上半分)
+    const WIN_ROW_Y:  [f32; 4] = [0.324, 0.411, 0.499, 0.586];
+    // LOSE 側 4行 (リザルト画面下半分)
+    const LOSE_ROW_Y: [f32; 4] = [0.669, 0.746, 0.824, 0.901];
     // プレイヤー統計列 (キル/デス/XP が白背景で並ぶ領域)
     const SAMPLE_X: [f32; 3] = [0.55, 0.65, 0.75];
 
-    let mut grey_rows = 0u32;
-    for &y_r in &ROW_Y {
+    let sample_grey = |y_r: f32| -> bool {
         let y = (y_r * frame.height as f32) as u32;
         let mut grey_samples = 0u32;
         for &x_r in &SAMPLE_X {
@@ -305,9 +314,12 @@ fn count_grey_rows(frame: &CapturedFrame) -> u32 {
                 grey_samples += 1;
             }
         }
-        if grey_samples >= 2 { grey_rows += 1; }
-    }
-    grey_rows
+        grey_samples >= 2
+    };
+
+    let win_grey  = WIN_ROW_Y.iter().filter(|&&y| sample_grey(y)).count() as u32;
+    let lose_grey = LOSE_ROW_Y.iter().filter(|&&y| sample_grey(y)).count() as u32;
+    (win_grey, lose_grey)
 }
 
 /// 黄色プレイヤー矢印 (▶) のピクセルを WIN/LOSE 各エリアでカウントする。
@@ -419,18 +431,19 @@ mod tests {
 
     #[test]
     fn test_grey_row_detection_all_white() {
-        // 全白フレームでは8行すべてグレー行として検出されるはず
+        // 全白フレームでは WIN 側 4行・LOSE 側 4行ともすべてグレー行
         let w = 1920u32;
         let h = 1080u32;
         let bgra = vec![255u8; (w * h * 4) as usize];
         let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
-        let rows = count_grey_rows(&frame);
-        assert_eq!(rows, 8, "all-white frame should have 8 grey rows");
+        let (win_grey, lose_grey) = count_grey_rows(&frame);
+        assert_eq!(win_grey,  4, "all-white: expected 4 win grey rows, got {win_grey}");
+        assert_eq!(lose_grey, 4, "all-white: expected 4 lose grey rows, got {lose_grey}");
     }
 
     #[test]
     fn test_grey_row_detection_all_colored() {
-        // 鮮やかな黄色フレームではグレー行なし
+        // 鮮やかな黄色フレームではどちらの側もグレー行なし
         let w = 1920u32;
         let h = 1080u32;
         let mut bgra = vec![0u8; (w * h * 4) as usize];
@@ -441,8 +454,45 @@ mod tests {
             bgra[i * 4 + 3] = 255;
         }
         let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
-        let rows = count_grey_rows(&frame);
-        assert_eq!(rows, 0, "saturated yellow frame should have 0 grey rows");
+        let (win_grey, lose_grey) = count_grey_rows(&frame);
+        assert_eq!(win_grey,  0, "saturated yellow: expected 0 win grey rows");
+        assert_eq!(lose_grey, 0, "saturated yellow: expected 0 lose grey rows");
+    }
+
+    #[test]
+    fn test_grey_row_detection_banner_screen_simulation() {
+        // バナー画面シミュレーション: WIN 側 (y<0.63) が暗い墨色、LOSE 側は明るい
+        // → win_grey=0 → 閾値未達でリザルト画面と判定されない
+        let w = 1920u32;
+        let h = 1080u32;
+        let mut bgra = vec![0u8; (w * h * 4) as usize];
+        for py in 0..h {
+            for px in 0..w {
+                let idx = ((py * w + px) * 4) as usize;
+                let y_r = py as f32 / h as f32;
+                if y_r < 0.63 {
+                    // WIN 側: 暗い墨色 (輝度 < 60) → グレー行条件を満たさない
+                    bgra[idx]     = 20; // B
+                    bgra[idx + 1] = 25; // G
+                    bgra[idx + 2] = 15; // R
+                } else {
+                    // LOSE 側: 明るいグレー
+                    bgra[idx]     = 200; // B
+                    bgra[idx + 1] = 205; // G
+                    bgra[idx + 2] = 200; // R
+                }
+                bgra[idx + 3] = 255;
+            }
+        }
+        let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
+        let (win_grey, lose_grey) = count_grey_rows(&frame);
+        assert_eq!(win_grey, 0, "banner screen WIN side should have 0 grey rows");
+        assert!(lose_grey >= 2, "banner screen LOSE side may have grey rows: {lose_grey}");
+        // 両サイド ≥2 の条件を満たさない → 誤検知しない
+        assert!(
+            win_grey < 2 || lose_grey < 2,
+            "banner screen should NOT pass both-half threshold (win={win_grey} lose={lose_grey})"
+        );
     }
 
     #[test]
