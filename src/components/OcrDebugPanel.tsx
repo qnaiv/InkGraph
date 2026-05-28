@@ -40,7 +40,7 @@ export function OcrDebugPanel() {
     try {
       const list = await invoke<WindowInfo[]>('list_windows');
       setWindows(list);
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
   };
 
   const runDiag = async () => {
