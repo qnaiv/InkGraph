@@ -21,7 +21,10 @@ mod windows_impl {
         core::{IInspectable, Interface},
         Graphics::{
             Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
-            DirectX::DirectXPixelFormat,
+            DirectX::{
+                Direct3D11::IDirect3DDevice,
+                DirectXPixelFormat,
+            },
         },
         Win32::{
             Foundation::{BOOL, HWND, LPARAM},
@@ -119,7 +122,7 @@ mod windows_impl {
             let dxgi_device: IDXGIDevice = d3d_device.cast()?;
             let inspectable: IInspectable =
                 unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device)? };
-            let winrt_device = inspectable.cast()?;
+            let winrt_device: IDirect3DDevice = inspectable.cast()?;
 
             // ── GraphicsCaptureItem ───────────────────────────────────────
             let interop: IGraphicsCaptureItemInterop =
