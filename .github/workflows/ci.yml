@@ -49,7 +49,7 @@ jobs:
             libglib2.0-dev
 
       - name: Run Rust unit tests
-        run: cargo test --lib -- --test-thread=1
+        run: cargo test --lib -- --test-threads=1
         env:
           # Windows-only機能はスキップ
           RUST_LOG: debug
