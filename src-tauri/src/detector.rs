@@ -13,7 +13,6 @@ use crate::{
     ocr::ocr_from_bgra,
 };
 use anyhow::Result;
-use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // デバッグ診断
@@ -25,15 +24,19 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
     let win_roi_text = ocr_roi(frame, &WIN_ROI, "en-US")
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
     let win_text_found = win_roi_text.contains("WIN");
-    let (yellow_win_px, yellow_lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
+    let (yellow_win_px, yellow_lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
+    let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
+    let spread_ok  = y_spread <= max_spread;
 
-    let detection_summary = if yellow_win_px >= MIN_YELLOW_PIXELS {
-        format!("WIN (win_px={yellow_win_px}, centroid_y={centroid_y:.3})")
+    let detection_summary = if !spread_ok {
+        format!("NOT_DETECTED — spread={y_spread}px > max={max_spread}px (分散した黄色、矢印ではない)")
+    } else if yellow_win_px >= MIN_YELLOW_PIXELS {
+        format!("WIN (win_px={yellow_win_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
     } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
-        format!("LOSE (lose_px={yellow_lose_px}, centroid_y={centroid_y:.3})")
+        format!("LOSE (lose_px={yellow_lose_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
     } else {
         format!(
-            "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS})"
+            "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS}, spread={y_spread}px)"
         )
     };
 
@@ -76,9 +79,13 @@ const ARROW_Y_END:   f32 = 0.940; // LOSE パネル末尾行より下
 /// 旧値 0.570 だと WIN 4番手行(y≈465px)が LOSE と誤判定されるため修正
 const PANEL_BOUNDARY_Y: f32 = 0.630;
 
-/// 黄色矢印と判定する最小ピクセル数 (ノイズ除去)
-/// リザルト画面では 600+ px が観測されるため 50 で誤検知を防ぎつつ確実に検出できる
-const MIN_YELLOW_PIXELS: u32 = 50;
+/// 黄色矢印と判定する最小ピクセル数
+/// リザルト画面では 350+ px が観測されるため 100 で誤検知を防ぎつつ確実に検出できる
+const MIN_YELLOW_PIXELS: u32 = 100;
+
+/// 黄色ピクセルの y 方向スプレッド上限 (フレーム高さに対する比率)
+/// 矢印 (▶) は集中した小領域のはずなので 12% 超なら別物と判断する
+const MAX_Y_SPREAD_RATIO: f32 = 0.12;
 
 // ---------------------------------------------------------------------------
 // Roi 構造体
@@ -106,9 +113,11 @@ impl Roi {
 // 検知エンジン
 // ---------------------------------------------------------------------------
 
+/// 検知器の状態
+/// Idle: リザルト画面待機中
+/// Locked: 検知済み → 画面が消えるまで再検知しない (重複防止)
 pub struct ResultDetector {
-    last_detected_at: Option<Instant>,
-    cooldown: Duration,
+    locked: bool,
 }
 
 /// 検知結果。Win/Lose には矢印の y 重心比率を持たせ、
@@ -138,40 +147,41 @@ impl DetectionResult {
 }
 
 impl ResultDetector {
-    pub fn new(cooldown_secs: u64) -> Self {
-        Self {
-            last_detected_at: None,
-            cooldown: Duration::from_secs(cooldown_secs),
-        }
+    pub fn new(_cooldown_secs: u64) -> Self {
+        Self { locked: false }
     }
 
-    /// フレームから WIN/LOSE を検知する。
+    /// フレームから WIN/LOSE を検知する (状態機械方式)。
     ///
-    /// 黄色プレイヤー矢印ピクセルスキャンのみで判定する。
-    /// WIN_ROI OCR はスタイル化フォントを認識できないため使用しない。
-    /// 誤検知防止は MIN_YELLOW_PIXELS (50) と cooldown (30s) で担保する。
+    /// Idle: 黄色ピクセルが閾値以上かつスプレッドが小さければ検知して Locked へ。
+    /// Locked: ピクセルが閾値を下回るまで再検知しない (画面開きっぱなし防止)。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
-        // クールダウンチェック
-        if let Some(last) = self.last_detected_at {
-            if last.elapsed() < self.cooldown {
-                return Ok(DetectionResult::NotDetected);
-            }
+        let (win_px, lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
+        let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
+
+        let on_screen = (win_px >= MIN_YELLOW_PIXELS || lose_px >= MIN_YELLOW_PIXELS)
+            && y_spread <= max_spread;
+
+        if !on_screen {
+            // リザルト画面が消えたのでロック解除
+            self.locked = false;
+            return Ok(DetectionResult::NotDetected);
         }
 
-        let (win_px, lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
-        log::debug!("[detector] yellow pixels — win={win_px} lose={lose_px} centroid_y={centroid_y:.3}");
+        if self.locked {
+            // 画面は出ているが既に記録済み
+            return Ok(DetectionResult::NotDetected);
+        }
 
+        // 新規検知 → ロック
+        self.locked = true;
         let result = if win_px >= MIN_YELLOW_PIXELS {
             DetectionResult::Win  { arrow_y_ratio: centroid_y }
-        } else if lose_px >= MIN_YELLOW_PIXELS {
-            DetectionResult::Lose { arrow_y_ratio: centroid_y }
         } else {
-            return Ok(DetectionResult::NotDetected);
+            DetectionResult::Lose { arrow_y_ratio: centroid_y }
         };
-
-        self.last_detected_at = Some(Instant::now());
         log::info!(
-            "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} arrow_y={centroid_y:.3})",
+            "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} spread={y_spread} arrow_y={centroid_y:.3})",
             result.result_str()
         );
         Ok(result)
@@ -190,12 +200,13 @@ fn ocr_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     Ok(result.text.to_uppercase())
 }
 
-/// 黄色プレイヤー矢印（▶）のピクセルを WIN/LOSE 各エリアでカウントし、
-/// 全黄色ピクセルの y 重心比率も返す。
+/// 黄色プレイヤー矢印（▶）のピクセルを WIN/LOSE 各エリアでカウントする。
 ///
 /// 黄色判定: R > 200, G > 170, B < 80
-/// 戻り値: (win_count, lose_count, centroid_y_ratio)
-fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32) {
+/// 戻り値: (win_count, lose_count, centroid_y_ratio, y_spread_px)
+///   y_spread_px: 黄色ピクセルの y 方向の広がり (max_y - min_y)
+///   矢印なら小さく、ゲームプレイ中の分散した黄色なら大きくなる
+fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
     let w = frame.width;
     let h = frame.height;
 
@@ -209,6 +220,8 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32) {
     let mut lose_count = 0u32;
     let mut sum_y      = 0u64;
     let mut total_px   = 0u32;
+    let mut min_y_px   = u32::MAX;
+    let mut max_y_px   = 0u32;
 
     for y in y0..y1.min(h) {
         for x in x0..x1.min(w) {
@@ -221,13 +234,11 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32) {
             let r = frame.bgra[idx + 2];
 
             if r > 200 && g > 170 && b < 80 {
-                if y < y_mid {
-                    win_count += 1;
-                } else {
-                    lose_count += 1;
-                }
+                if y < y_mid { win_count += 1; } else { lose_count += 1; }
                 sum_y    += y as u64;
                 total_px += 1;
+                if y < min_y_px { min_y_px = y; }
+                if y > max_y_px { max_y_px = y; }
             }
         }
     }
@@ -237,8 +248,9 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32) {
     } else {
         0.5
     };
+    let y_spread = if total_px > 0 { max_y_px - min_y_px } else { 0 };
 
-    (win_count, lose_count, centroid_y)
+    (win_count, lose_count, centroid_y, y_spread)
 }
 
 // ---------------------------------------------------------------------------

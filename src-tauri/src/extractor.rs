@@ -200,6 +200,14 @@ pub fn normalize_rule(raw: &str) -> Option<String> {
 
 /// ステージ名の正規化
 pub fn normalize_stage(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    // 空文字チェックを先に行う。
+    // これをしないと stage.contains("") が常に true になり
+    // リストの先頭ステージが必ず返ってしまうバグが起きる。
+    if trimmed.is_empty() {
+        return None;
+    }
+
     // スプラトゥーン3 全ステージ (2024-2026 時点)
     let stages = [
         "ユノハナ大渓谷",
@@ -227,18 +235,20 @@ pub fn normalize_stage(raw: &str) -> Option<String> {
         "ショッツル鉱山",
     ];
 
-    // OCR 結果と部分一致するステージを探す
     for stage in &stages {
-        if raw.contains(stage) || stage.contains(raw.trim()) {
+        // OCR テキストにステージ名が含まれる (ゴミ文字が混入しても正しく拾える)
+        if trimmed.contains(stage) {
+            return Some(stage.to_string());
+        }
+        // OCR が短く切れた場合の部分一致 (4文字以上のみ、空文字誤検知防止)
+        let char_count = trimmed.chars().count();
+        if char_count >= 4 && stage.contains(trimmed) {
             return Some(stage.to_string());
         }
     }
 
-    if raw.trim().is_empty() {
-        None
-    } else {
-        Some(raw.trim().to_string())
-    }
+    // どのステージとも一致しない = OCR ゴミ文字列 → 保存しない
+    None
 }
 
 // ---------------------------------------------------------------------------
