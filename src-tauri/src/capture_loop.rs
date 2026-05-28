@@ -107,31 +107,27 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
             }
         };
 
-        match detection {
-            DetectionResult::NotDetected => {}
-            result => {
-                let result_str = if result == DetectionResult::Win { "win" } else { "lose" };
-
-                match extract_match_data(&frame, result_str) {
-                    Ok(data) => {
-                        let match_record = new_match_from_ocr(
-                            &data.result,
-                            data.kill_count,
-                            data.assist_count,
-                            data.death_count,
-                            data.xp_after,
-                            data.rule,
-                            data.stage,
-                        );
-                        log::info!("[capture_loop] match detected: {:?}", match_record);
-                        let _ = app.emit(
-                            "match_detected",
-                            MatchDetectedPayload { match_data: match_record, ocr_confidence: 1.0 },
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("[capture_loop] extraction failed: {e}");
-                    }
+        if let Some(result_str) = detection.result_str() {
+            let arrow_y = detection.arrow_y_ratio().unwrap_or(0.44);
+            match extract_match_data(&frame, result_str, arrow_y) {
+                Ok(data) => {
+                    let match_record = new_match_from_ocr(
+                        &data.result,
+                        data.kill_count,
+                        data.assist_count,
+                        data.death_count,
+                        data.xp_after,
+                        data.rule,
+                        data.stage,
+                    );
+                    log::info!("[capture_loop] match detected: {:?}", match_record);
+                    let _ = app.emit(
+                        "match_detected",
+                        MatchDetectedPayload { match_data: match_record, ocr_confidence: 1.0 },
+                    );
+                }
+                Err(e) => {
+                    log::error!("[capture_loop] extraction failed: {e}");
                 }
             }
         }

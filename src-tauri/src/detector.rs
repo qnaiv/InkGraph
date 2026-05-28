@@ -4,9 +4,9 @@
 /// 1. WIN_ROI への OCR で「WIN!」テキストを確認 → リザルト画面か判定
 /// 2. 黄色プレイヤー矢印（▶）をピクセルカラーでスキャン
 /// 3. 矢印が WIN パネル側か LOSE パネル側かで勝敗を判定
+/// 4. 矢印の y 重心を DetectionResult に含め extractor が行位置を特定できるようにする
 ///
-/// OCR のみの方式だと WIN! LOSE... が常に両方表示されるため判定不可。
-/// ピクセルスキャンは OCR より高速かつ誤認識がない。
+/// ROI 座標はバンカラマッチ / Xマッチ 1456×816 スクリーンショットで実測 (2026-05-28)。
 
 use crate::{
     capture::CapturedFrame,
@@ -32,15 +32,15 @@ const WIN_ROI: Roi = Roi {
 };
 
 /// プレイヤー矢印スキャン領域 (黄色 ▶ が表示される x 帯)
-/// y 方向は WIN/LOSE 両パネルをカバー
 const ARROW_X_START: f32 = 0.455;
-const ARROW_X_END:   f32 = 0.500;
-const ARROW_Y_START: f32 = 0.280; // WIN パネル内プレイヤー行の上端
-const ARROW_Y_END:   f32 = 0.920; // LOSE パネル内プレイヤー行の下端
+const ARROW_X_END:   f32 = 0.505;
+const ARROW_Y_START: f32 = 0.270; // WIN パネル先頭行より上
+const ARROW_Y_END:   f32 = 0.940; // LOSE パネル末尾行より下
 
 /// WIN パネルと LOSE パネルの境界 y 比率
-/// この値より上 → WIN チーム / 以下 → LOSE チーム
-const PANEL_BOUNDARY_Y: f32 = 0.570;
+/// 実測: LOSE...ヘッダーは y ≈ 510px / 816px ≈ 0.625
+/// 旧値 0.570 だと WIN 4番手行(y≈465px)が LOSE と誤判定されるため修正
+const PANEL_BOUNDARY_Y: f32 = 0.630;
 
 /// 黄色矢印と判定する最小ピクセル数 (ノイズ除去)
 const MIN_YELLOW_PIXELS: u32 = 15;
@@ -76,11 +76,30 @@ pub struct ResultDetector {
     cooldown: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 検知結果。Win/Lose には矢印の y 重心比率を持たせ、
+/// extractor がプレイヤー行を動的に特定できるようにする。
+#[derive(Debug, Clone)]
 pub enum DetectionResult {
-    Win,
-    Lose,
+    Win  { arrow_y_ratio: f32 },
+    Lose { arrow_y_ratio: f32 },
     NotDetected,
+}
+
+impl DetectionResult {
+    pub fn result_str(&self) -> Option<&'static str> {
+        match self {
+            Self::Win  { .. } => Some("win"),
+            Self::Lose { .. } => Some("lose"),
+            Self::NotDetected => None,
+        }
+    }
+
+    pub fn arrow_y_ratio(&self) -> Option<f32> {
+        match self {
+            Self::Win  { arrow_y_ratio } | Self::Lose { arrow_y_ratio } => Some(*arrow_y_ratio),
+            Self::NotDetected => None,
+        }
+    }
 }
 
 impl ResultDetector {
@@ -109,23 +128,22 @@ impl ResultDetector {
             return Ok(DetectionResult::NotDetected);
         }
 
-        // Step 2: 黄色矢印でプレイヤー結果を判定
-        let (win_px, lose_px) = count_yellow_arrow_pixels(frame);
-        log::debug!("[detector] yellow pixels — win_area={win_px} lose_area={lose_px}");
+        // Step 2 & 3: 黄色矢印でプレイヤー結果と行位置を判定
+        let (win_px, lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
+        log::debug!("[detector] yellow pixels — win={win_px} lose={lose_px} centroid_y={centroid_y:.3}");
 
         let result = if win_px >= MIN_YELLOW_PIXELS {
-            DetectionResult::Win
+            DetectionResult::Win  { arrow_y_ratio: centroid_y }
         } else if lose_px >= MIN_YELLOW_PIXELS {
-            DetectionResult::Lose
+            DetectionResult::Lose { arrow_y_ratio: centroid_y }
         } else {
-            // 矢印が見つからない: まだ画面が安定していない可能性
             return Ok(DetectionResult::NotDetected);
         };
 
         self.last_detected_at = Some(Instant::now());
         log::info!(
-            "[detector] {:?} detected (win_px={win_px} lose_px={lose_px})",
-            result
+            "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} arrow_y={centroid_y:.3})",
+            result.result_str()
         );
         Ok(result)
     }
@@ -143,22 +161,25 @@ fn ocr_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     Ok(result.text.to_uppercase())
 }
 
-/// 黄色プレイヤー矢印（▶）のピクセルを WIN/LOSE 各エリアでカウントする
+/// 黄色プレイヤー矢印（▶）のピクセルを WIN/LOSE 各エリアでカウントし、
+/// 全黄色ピクセルの y 重心比率も返す。
 ///
 /// 黄色判定: R > 200, G > 170, B < 80
-/// 矢印は ARROW_X_START〜X_END の細い帯に現れる
-fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32) {
+/// 戻り値: (win_count, lose_count, centroid_y_ratio)
+fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32) {
     let w = frame.width;
     let h = frame.height;
 
-    let x0    = (ARROW_X_START      * w as f32) as u32;
-    let x1    = (ARROW_X_END        * w as f32) as u32;
-    let y0    = (ARROW_Y_START      * h as f32) as u32;
-    let y1    = (ARROW_Y_END        * h as f32) as u32;
-    let y_mid = (PANEL_BOUNDARY_Y   * h as f32) as u32;
+    let x0    = (ARROW_X_START    * w as f32) as u32;
+    let x1    = (ARROW_X_END      * w as f32) as u32;
+    let y0    = (ARROW_Y_START    * h as f32) as u32;
+    let y1    = (ARROW_Y_END      * h as f32) as u32;
+    let y_mid = (PANEL_BOUNDARY_Y * h as f32) as u32;
 
     let mut win_count  = 0u32;
     let mut lose_count = 0u32;
+    let mut sum_y      = 0u64;
+    let mut total_px   = 0u32;
 
     for y in y0..y1.min(h) {
         for x in x0..x1.min(w) {
@@ -170,18 +191,25 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32) {
             let g = frame.bgra[idx + 1];
             let r = frame.bgra[idx + 2];
 
-            // 黄色矢印の色 (スプラトゥーン3 の UI カラーに合わせた閾値)
             if r > 200 && g > 170 && b < 80 {
                 if y < y_mid {
                     win_count += 1;
                 } else {
                     lose_count += 1;
                 }
+                sum_y    += y as u64;
+                total_px += 1;
             }
         }
     }
 
-    (win_count, lose_count)
+    let centroid_y = if total_px > 0 {
+        (sum_y / total_px as u64) as f32 / h as f32
+    } else {
+        0.5
+    };
+
+    (win_count, lose_count, centroid_y)
 }
 
 // ---------------------------------------------------------------------------
@@ -230,10 +258,10 @@ mod tests {
 
     #[test]
     fn test_panel_boundary_pixels() {
-        // 1456×816 でパネル境界が正しい位置にあることを確認
+        // 1456×816 で LOSE...ヘッダーは y≈510px → boundary は 480〜560 の間
         let y_mid = (PANEL_BOUNDARY_Y * 816.0) as u32;
-        assert!(y_mid > 400, "boundary y={y_mid} too high");
-        assert!(y_mid < 550, "boundary y={y_mid} too low");
+        assert!(y_mid > 480, "boundary y={y_mid} too high (WIN row4 ≈ 465px)");
+        assert!(y_mid < 560, "boundary y={y_mid} too low (LOSE row1 ≈ 560px)");
     }
 
     #[test]
@@ -261,14 +289,14 @@ mod tests {
 
     #[test]
     fn test_count_yellow_arrow_win_area() {
-        // WIN エリア (y < PANEL_BOUNDARY_Y) に黄色ピクセルを配置して Win を期待
+        // WIN エリア (y < PANEL_BOUNDARY_Y=0.630) に黄色ピクセルを配置
         let w = 100u32;
         let h = 100u32;
         let mut bgra = vec![0u8; (w * h * 4) as usize];
 
-        // x=48, y=30 (= ARROW_X_START*100=45..50, ARROW_Y_START*100=28..BOUNDARY*100=57)
+        // ARROW_X_START*100=45..51, y=35 (< boundary*100=63)
         let px_x = 47u32;
-        let px_y = 35u32; // y < boundary(57)
+        let px_y = 35u32;
         for dy in 0..5u32 {
             let idx = (((px_y + dy) * w + px_x) * 4) as usize;
             bgra[idx]     = 30;  // B
@@ -278,8 +306,24 @@ mod tests {
         }
 
         let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
-        let (win_px, lose_px) = count_yellow_arrow_pixels(&frame);
+        let (win_px, lose_px, centroid_y) = count_yellow_arrow_pixels(&frame);
         assert!(win_px >= 5, "expected win yellow pixels, got {win_px}");
         assert_eq!(lose_px, 0);
+        assert!(centroid_y > 0.3 && centroid_y < 0.5, "centroid_y={centroid_y:.3}");
+    }
+
+    #[test]
+    fn test_detection_result_helpers() {
+        let win  = DetectionResult::Win  { arrow_y_ratio: 0.44 };
+        let lose = DetectionResult::Lose { arrow_y_ratio: 0.72 };
+        let none = DetectionResult::NotDetected;
+
+        assert_eq!(win.result_str(),  Some("win"));
+        assert_eq!(lose.result_str(), Some("lose"));
+        assert_eq!(none.result_str(), None);
+
+        assert!((win.arrow_y_ratio().unwrap()  - 0.44).abs() < 1e-5);
+        assert!((lose.arrow_y_ratio().unwrap() - 0.72).abs() < 1e-5);
+        assert!(none.arrow_y_ratio().is_none());
     }
 }

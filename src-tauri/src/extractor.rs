@@ -21,54 +21,39 @@ use anyhow::Result;
 
 use crate::detector::Roi;
 
-// ── ルール・ステージ (実測値) ────────────────────────────────────────────
-// リザルト画面上部に「ガチヤグラ  リュウグウターミナル」のように並ぶ。
+// ── ルール・ステージ (実測値: 1456×816 Xマッチスクショ 2026-05-28) ──────
+// リザルト画面上部に「ガチエリア  タラポートショッピングパーク」のように並ぶ。
 
-/// ルール名 (ガチエリア / ガチヤグラ / ガチホコ / ガチアサリ)
+/// ルール名: 実測 x≈668/1456=0.459, w≈135px
 const RULE_ROI: Roi = Roi {
-    x_ratio: 0.410,
+    x_ratio: 0.450,
     y_ratio: 0.060,
-    w_ratio: 0.140,
-    h_ratio: 0.065,
+    w_ratio: 0.120,
+    h_ratio: 0.058,
 };
 
-/// ステージ名
+/// ステージ名: 実測 x≈820/1456=0.563, w≈330px
 const STAGE_ROI: Roi = Roi {
-    x_ratio: 0.500,
+    x_ratio: 0.545,
     y_ratio: 0.060,
-    w_ratio: 0.280,
-    h_ratio: 0.065,
+    w_ratio: 0.240,
+    h_ratio: 0.058,
 };
 
-// ── KDA (TODO: Xマッチスクショで要調整) ────────────────────────────────
-// 自チームの自分の行: 左から Kill / Assist / Death のアイコン + 数字。
-// 現在値は仮の推定値。
+// ── KDA 列 x 座標 (実測値: 1456×816 Xマッチスクショ 2026-05-28) ────────
+// Splatoon3 リザルトパネルの列構成: [キル] [デス] [スペシャル]
+// y 座標は矢印の y 重心から動的に決める (プレイヤー行は 1〜4 で変わるため)。
+// ExtractedMatchData の kill / assist / death フィールドに格納する。
 
-/// 自分のキル数
-const KILL_ROI: Roi = Roi {
-    x_ratio: 0.750,
-    y_ratio: 0.340,
-    w_ratio: 0.055,
-    h_ratio: 0.060,
-};
-/// アシスト数
-const ASSIST_ROI: Roi = Roi {
-    x_ratio: 0.820,
-    y_ratio: 0.340,
-    w_ratio: 0.045,
-    h_ratio: 0.060,
-};
-/// デス数
-const DEATH_ROI: Roi = Roi {
-    x_ratio: 0.875,
-    y_ratio: 0.340,
-    w_ratio: 0.050,
-    h_ratio: 0.060,
-};
+const KILL_COL_X:  f32 = 0.758; // x≈1104/1456
+const DEATH_COL_X: f32 = 0.822; // x≈1197/1456
+const SPEC_COL_X:  f32 = 0.863; // x≈1257/1456
+const KDA_COL_W:   f32 = 0.048; // 幅≈70px
+const KDA_ROW_H:   f32 = 0.052; // 高さ≈42px
 
-// ── XP (TODO: Xマッチスクショで要調整) ─────────────────────────────────
-// Xマッチリザルト画面にのみ表示される Xパワー値。
-// バンカラ/ナワバリには存在しないため None を返す。
+// ── XP (Xマッチ専用・別画面) ─────────────────────────────────────────
+// Xパワーは試合リザルトパネルではなく個人サマリ画面に表示される。
+// TODO: 実際の表示画面スクショで座標を確定する
 
 /// X パワー表示領域 (Xマッチ専用)
 const XP_ROI: Roi = Roi {
@@ -82,9 +67,11 @@ const XP_ROI: Roi = Roi {
 // 抽出処理
 // ---------------------------------------------------------------------------
 
-/// リザルト画面フレームから全データを抽出する
-pub fn extract_match_data(frame: &CapturedFrame, result: &str) -> Result<ExtractedMatchData> {
-    let (kill_count, assist_count, death_count) = extract_kda(frame)?;
+/// リザルト画面フレームから全データを抽出する。
+/// `arrow_y_ratio`: 黄色矢印の y 重心比率 (detector から受け取る)。
+/// プレイヤーが何行目にいるかが毎試合変わるため、この値で KDA 行を動的に特定する。
+pub fn extract_match_data(frame: &CapturedFrame, result: &str, arrow_y_ratio: f32) -> Result<ExtractedMatchData> {
+    let (kill_count, assist_count, death_count) = extract_kda(frame, arrow_y_ratio)?;
     let xp_after = extract_xp(frame)?;
     let rule = extract_rule(frame);
     let stage = extract_stage(frame);
@@ -100,12 +87,22 @@ pub fn extract_match_data(frame: &CapturedFrame, result: &str) -> Result<Extract
     })
 }
 
-/// KDA を抽出する
-fn extract_kda(frame: &CapturedFrame) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
-    let kill = extract_integer_roi(frame, &KILL_ROI, "en-US");
-    let assist = extract_integer_roi(frame, &ASSIST_ROI, "en-US");
-    let death = extract_integer_roi(frame, &DEATH_ROI, "en-US");
-    Ok((kill, assist, death))
+/// KDA を抽出する。
+/// `arrow_y_ratio` から y_top を計算し、プレイヤー行の KDA 列を読む。
+/// 列の意味: kill=キル / assist=デス / death=スペシャル (DB スキーマ名に合わせて格納)
+fn extract_kda(frame: &CapturedFrame, arrow_y_ratio: f32) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
+    // 矢印重心を行の中央とみなし、上下 KDA_ROW_H/2 の範囲を切り出す
+    let y_ratio = (arrow_y_ratio - KDA_ROW_H / 2.0).max(0.0);
+
+    let kill_roi = Roi { x_ratio: KILL_COL_X,  y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+    let deat_roi = Roi { x_ratio: DEATH_COL_X, y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+    let spec_roi = Roi { x_ratio: SPEC_COL_X,  y_ratio, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
+
+    let kill  = extract_integer_roi(frame, &kill_roi, "en-US");
+    let death = extract_integer_roi(frame, &deat_roi, "en-US");
+    let spec  = extract_integer_roi(frame, &spec_roi, "en-US");
+
+    Ok((kill, death, spec))
 }
 
 /// XP を抽出する（小数点以下1桁の float）
