@@ -27,19 +27,14 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
     let win_text_found = win_roi_text.contains("WIN");
     let (yellow_win_px, yellow_lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
 
-    let detection_summary = if win_text_found {
-        if yellow_win_px >= MIN_YELLOW_PIXELS {
-            format!("WIN (win_px={yellow_win_px})")
-        } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
-            format!("LOSE (lose_px={yellow_lose_px})")
-        } else {
-            format!(
-                "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS})"
-            )
-        }
+    let detection_summary = if yellow_win_px >= MIN_YELLOW_PIXELS {
+        format!("WIN (win_px={yellow_win_px}, centroid_y={centroid_y:.3})")
+    } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
+        format!("LOSE (lose_px={yellow_lose_px}, centroid_y={centroid_y:.3})")
     } else {
-        let preview: String = win_roi_text.chars().take(60).collect();
-        format!("NOT_DETECTED — WIN テキスト未検出 (ocr={preview:?})")
+        format!(
+            "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS})"
+        )
     };
 
     Ok(crate::types::CaptureDebugResult {
