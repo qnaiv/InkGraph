@@ -61,8 +61,8 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
 // 実測: バンカラマッチ 1456×816 スクショ (2026-05-27)
 // Xマッチ / バンカラ / ナワバリで共通レイアウト
 
-/// リザルト画面確認用: WIN! バナー (ピンク帯)
-/// OCR で「WIN」テキストが取れればリザルト画面と判定する
+/// WIN! バナー領域 — debug_detect_frame の診断用のみ。
+/// WinRT OCR はスタイル化フォントを認識できないため detect() では使用しない。
 const WIN_ROI: Roi = Roi {
     x_ratio: 0.455,
     y_ratio: 0.267,
@@ -82,7 +82,8 @@ const ARROW_Y_END:   f32 = 0.940; // LOSE パネル末尾行より下
 const PANEL_BOUNDARY_Y: f32 = 0.630;
 
 /// 黄色矢印と判定する最小ピクセル数 (ノイズ除去)
-const MIN_YELLOW_PIXELS: u32 = 15;
+/// リザルト画面では 600+ px が観測されるため 50 で誤検知を防ぎつつ確実に検出できる
+const MIN_YELLOW_PIXELS: u32 = 50;
 
 // ---------------------------------------------------------------------------
 // Roi 構造体
@@ -151,8 +152,9 @@ impl ResultDetector {
 
     /// フレームから WIN/LOSE を検知する。
     ///
-    /// Step 1: WIN_ROI OCR で「WIN」テキスト確認 → リザルト画面ガード
-    /// Step 2: 黄色矢印ピクセルスキャンでプレイヤーの勝敗を判定
+    /// 黄色プレイヤー矢印ピクセルスキャンのみで判定する。
+    /// WIN_ROI OCR はスタイル化フォントを認識できないため使用しない。
+    /// 誤検知防止は MIN_YELLOW_PIXELS (50) と cooldown (30s) で担保する。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
         // クールダウンチェック
         if let Some(last) = self.last_detected_at {
@@ -161,13 +163,6 @@ impl ResultDetector {
             }
         }
 
-        // Step 1: リザルト画面確認 (WIN! テキストの存在チェック)
-        let win_text = ocr_roi(frame, &WIN_ROI, "en-US")?;
-        if !win_text.contains("WIN") {
-            return Ok(DetectionResult::NotDetected);
-        }
-
-        // Step 2 & 3: 黄色矢印でプレイヤー結果と行位置を判定
         let (win_px, lose_px, centroid_y) = count_yellow_arrow_pixels(frame);
         log::debug!("[detector] yellow pixels — win={win_px} lose={lose_px} centroid_y={centroid_y:.3}");
 
