@@ -138,22 +138,19 @@ impl ResultDetector {
             // Phase 1: バトル開始検知
             // ------------------------------------------------------------------
             DetectorPhase::WaitingForBattle => {
-                // 1a: 暗い巻物背景のピクセル判定 (高速・フォント不依存)
-                let dark = detect_dark_scroll(frame);
-
-                // 1b: OCR フォールバック (1a がヒットしたときはスキップ)
-                let battle_start = dark || {
-                    let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
-                        .unwrap_or_default()
-                        .replace(char::is_whitespace, "");
-                    // WinRT OCR は文字間スペースを挿入するため除去して照合
-                    // "開" が落ちる場合もあるので "始します" も補完キーワードとして使う
-                    text.contains("バトル") || text.contains("開始") || text.contains("始します")
-                };
+                // OCR で「バトルを開始します！」テキストを検出
+                // WinRT OCR は文字間スペースを挿入するため除去して照合
+                // "開" が落ちる場合もあるので "始します" も補完キーワードとして使う
+                let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
+                    .unwrap_or_default()
+                    .replace(char::is_whitespace, "");
+                let battle_start = text.contains("バトル")
+                    || text.contains("開始")
+                    || text.contains("始します");
 
                 if battle_start {
                     self.phase = DetectorPhase::InGame;
-                    log::info!("[detector] battle start (dark={dark}) → InGame");
+                    log::info!("[detector] battle start (OCR) → InGame");
                     return Ok(DetectionResult::BattleStarted);
                 }
                 Ok(DetectionResult::NotDetected)
@@ -273,9 +270,8 @@ fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     Ok(ocr_from_bgra(&processed, w, h, Some(lang))?.text)
 }
 
-/// 「バトルを開始します！」の暗い巻物背景をピクセル輝度で検出する。
+/// 暗い巻物背景をピクセル輝度で検出する（診断用・detect() では使用しない）。
 /// BATTLE_START_ROI 内で輝度 < 30 のピクセルが 40% 以上あれば true。
-/// 閾値を厳しくすることで、ロビー・メニュー画面での誤検知を防ぐ。
 fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
     let (x0, y0, w, h) = BATTLE_START_ROI.to_pixels(frame.width, frame.height);
     let mut dark = 0u32;
