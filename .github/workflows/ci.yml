@@ -23,16 +23,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-
-      - name: Install system deps (WebKit2GTK for Tauri)
+      - name: Install system deps (Ubuntu)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -47,13 +38,23 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libglib2.0-dev \
-            libsqlite3-dev
+            libsqlite3-dev \
+            pkg-config
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
 
       - name: Run Rust unit tests
         run: cargo test --lib -- --test-threads=1
         env:
-          # Windows-only機能はスキップ
           RUST_LOG: debug
+          CARGO_INCREMENTAL: "0"
+          RUST_BACKTRACE: "1"
 
   # ─────────────────────────────────────────────────────────────────
   # フロントエンド: 型チェック + Lint
