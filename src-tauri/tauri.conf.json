@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "IkaVision XP",
+  "productName": "InkGraph",
   "version": "0.1.0",
-  "identifier": "com.qnaiv.ikavision-xp",
+  "identifier": "com.qnaiv.inkgraph",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "IkaVision XP",
+        "title": "InkGraph",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

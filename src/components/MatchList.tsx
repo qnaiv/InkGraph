@@ -1,4 +1,4 @@
-// IkaVision XP — 直近の試合リスト
+// InkGraph — 直近の試合リスト
 
 import type { Match } from '../types';
 import { MatchCard } from './MatchCard';

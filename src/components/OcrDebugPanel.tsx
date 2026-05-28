@@ -1,4 +1,4 @@
-// IkaVision XP — OCR デバッグパネル
+// InkGraph — OCR デバッグパネル
 // Issue #2 の Windows 実機確認用。開発ビルド時のみ表示する。
 
 import { useState } from 'react';

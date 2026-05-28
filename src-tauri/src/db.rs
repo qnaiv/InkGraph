@@ -1,4 +1,4 @@
-/// IkaVision XP — データベースヘルパー
+/// InkGraph — データベースヘルパー
 ///
 /// DB の CRUD は tauri-plugin-sql 経由でフロントエンド (JS) が直接実行します。
 /// Rust 側はマイグレーション定義と、キャプチャループで使う Match 生成のみを担います。

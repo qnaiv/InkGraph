@@ -1,4 +1,4 @@
-// IkaVision XP — 試合データ管理フック
+// InkGraph — 試合データ管理フック
 
 import { useState, useEffect, useCallback } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';

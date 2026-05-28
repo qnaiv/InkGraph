@@ -1,4 +1,4 @@
-// IkaVision XP — ブキ一覧データ (スプラトゥーン3)
+// InkGraph — ブキ一覧データ (スプラトゥーン3)
 
 export interface Weapon {
   id: string;

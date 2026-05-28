@@ -1,4 +1,4 @@
-// IkaVision XP — XP 推移グラフ
+// InkGraph — XP 推移グラフ
 
 import {
   LineChart,

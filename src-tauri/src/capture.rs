@@ -1,4 +1,4 @@
-/// IkaVision XP — 画面キャプチャ (Windows Graphics Capture)
+/// InkGraph — 画面キャプチャ (Windows Graphics Capture)
 ///
 /// `WindowCaptureSession` を一度だけ作成し、フレームを繰り返し取得する。
 /// セッションを毎フレーム作り直すとキャプチャインジケーターが点滅するため、

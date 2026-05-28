@@ -1,4 +1,4 @@
-// IkaVision XP — フロントエンド型定義
+// InkGraph — フロントエンド型定義
 
 export interface Match {
   id: string;

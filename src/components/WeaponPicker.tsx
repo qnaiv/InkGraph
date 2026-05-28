@@ -1,4 +1,4 @@
-// IkaVision XP — ブキ選択 UI
+// InkGraph — ブキ選択 UI
 
 import { useState, useMemo } from 'react';
 import { WEAPONS, getRecentWeapons, pushRecentWeapon, type Weapon } from '../assets/weapons';

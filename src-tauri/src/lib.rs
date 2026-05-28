@@ -1,4 +1,4 @@
-/// IkaVision XP — Tauri アプリのエントリポイント
+/// InkGraph — Tauri アプリのエントリポイント
 
 pub mod capture;
 pub mod capture_loop;
@@ -52,5 +52,5 @@ pub fn run() {
             debug_capture,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running IkaVision XP");
+        .expect("error while running InkGraph");
 }

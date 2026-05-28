@@ -1,4 +1,4 @@
-// IkaVision XP — 試合カード (コンパクト行 / 展開で編集)
+// InkGraph — 試合カード (コンパクト行 / 展開で編集)
 
 import { useState } from 'react';
 import type { Match } from '../types';

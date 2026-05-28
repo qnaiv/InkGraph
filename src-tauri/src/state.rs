@@ -1,4 +1,4 @@
-/// IkaVision XP — グローバルアプリ状態
+/// InkGraph — グローバルアプリ状態
 use std::sync::Arc;
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::Mutex;

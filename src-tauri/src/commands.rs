@@ -1,4 +1,4 @@
-/// IkaVision XP — Tauri コマンド定義
+/// InkGraph — Tauri コマンド定義
 
 use tauri::{AppHandle, Emitter, State};
 use crate::{

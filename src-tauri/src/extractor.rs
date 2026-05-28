@@ -4,7 +4,7 @@ use crate::{
     ocr::{ocr_from_bgra, preprocess_bgra},
     types::ExtractedMatchData,
 };
-/// IkaVision XP — データ抽出モジュール
+/// InkGraph — データ抽出モジュール
 ///
 /// リザルト画面から各 ROI をクロップして OCR し、
 /// キル・デス・XP・ルール・ステージを数値/文字列に変換します。

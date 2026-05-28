@@ -1,4 +1,4 @@
-// IkaVision XP — 反省タグ入力 UI
+// InkGraph — 反省タグ入力 UI
 
 import { PRESET_TAGS } from '../types';
 

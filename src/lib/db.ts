@@ -1,4 +1,4 @@
-// IkaVision XP — SQLite アクセス層
+// InkGraph — SQLite アクセス層
 //
 // tauri-plugin-sql の Database クラスを薄くラップします。
 // DB 接続はシングルトンとして保持し、初回アクセス時に自動接続します。

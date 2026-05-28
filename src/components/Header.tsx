@@ -1,4 +1,4 @@
-// IkaVision XP — ヘッダーコンポーネント
+// InkGraph — ヘッダーコンポーネント
 
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -61,7 +61,7 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
       <div className="flex items-center gap-3">
         <span className="text-2xl">🦑</span>
         <div>
-          <h1 className="text-lg font-bold text-white leading-none">IkaVision XP</h1>
+          <h1 className="text-lg font-bold text-white leading-none">InkGraph</h1>
           <p className="text-xs text-slate-400 leading-none">Splatoon 3 X-Match Tracker</p>
         </div>
       </div>

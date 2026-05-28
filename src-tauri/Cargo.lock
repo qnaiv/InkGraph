@@ -1789,28 +1789,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ikavision-xp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "log",
- "once_cell",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-log",
- "tauri-plugin-shell",
- "tauri-plugin-sql",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
- "windows 0.58.0",
-]
-
-[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1840,6 +1818,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a588916bfdfd92e71cacef98a63d9b1f0d74d6599980d11894290e7ddefffcf7"
 dependencies = [
  "cfb",
+]
+
+[[package]]
+name = "inkgraph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-log",
+ "tauri-plugin-shell",
+ "tauri-plugin-sql",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+ "windows 0.58.0",
 ]
 
 [[package]]

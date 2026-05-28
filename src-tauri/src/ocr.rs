@@ -1,4 +1,4 @@
-/// IkaVision XP — WinRT OCR エンジン
+/// InkGraph — WinRT OCR エンジン
 ///
 /// Windows.Media.Ocr を使って BGRA8 バイト列からテキストを抽出します。
 /// Windows 以外のプラットフォームではスタブを提供します。

@@ -1,4 +1,4 @@
-// IkaVision XP — メインアプリコンポーネント
+// InkGraph — メインアプリコンポーネント
 
 import { useState } from 'react';
 import { Header } from './components/Header';
