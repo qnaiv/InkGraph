@@ -124,39 +124,43 @@ export function OcrDebugPanel() {
               <span className="text-white font-mono">{diagResult.frame_w} × {diagResult.frame_h}</span>
             </div>
 
-            {/* Step 1: OCR */}
+            {/* Phase 1: バトル開始 */}
             <div className="bg-slate-800 rounded-lg p-2 text-xs">
               <div className="flex justify-between mb-1">
-                <span className="text-slate-400">Step 1: WIN_ROI OCR</span>
-                <span className={diagResult.win_text_found ? 'text-green-400' : 'text-red-400'}>
-                  {diagResult.win_text_found ? '✓ WIN 検出' : '✗ WIN 未検出'}
+                <span className="text-slate-400">Phase 1: バトル開始テキスト</span>
+                <span className={diagResult.battle_start_found ? 'text-green-400' : 'text-slate-500'}>
+                  {diagResult.battle_start_found ? '✓ 検出' : '✗ 未検出'}
                 </span>
               </div>
               <pre className="text-slate-300 text-xs whitespace-pre-wrap break-all max-h-16 overflow-y-auto bg-slate-900 rounded p-1">
-                {diagResult.win_roi_text || '(空)'}
+                {diagResult.battle_start_text || '(空)'}
               </pre>
             </div>
 
-            {/* Step 2: 黄色矢印 */}
+            {/* Phase 2: 黄色矢印 */}
             <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
-              <span className="text-slate-400">Step 2: 黄色矢印ピクセル</span>
-              <div className="grid grid-cols-3 gap-1 mt-1">
+              <span className="text-slate-400">Phase 2: 黄色矢印ピクセル</span>
+              <div className="grid grid-cols-4 gap-1 mt-1">
                 <div className="bg-slate-900 rounded p-1 text-center">
                   <p className="text-slate-500 text-xs">WIN 側</p>
-                  <p className={`font-mono font-bold ${diagResult.yellow_win_px >= 15 ? 'text-green-400' : 'text-slate-300'}`}>
+                  <p className={`font-mono font-bold ${diagResult.yellow_win_px >= 100 ? 'text-green-400' : 'text-slate-300'}`}>
                     {diagResult.yellow_win_px}
                   </p>
                 </div>
                 <div className="bg-slate-900 rounded p-1 text-center">
                   <p className="text-slate-500 text-xs">LOSE 側</p>
-                  <p className={`font-mono font-bold ${diagResult.yellow_lose_px >= 15 ? 'text-yellow-400' : 'text-slate-300'}`}>
+                  <p className={`font-mono font-bold ${diagResult.yellow_lose_px >= 100 ? 'text-yellow-400' : 'text-slate-300'}`}>
                     {diagResult.yellow_lose_px}
                   </p>
                 </div>
                 <div className="bg-slate-900 rounded p-1 text-center">
                   <p className="text-slate-500 text-xs">重心 y</p>
-                  <p className="text-white font-mono font-bold">
-                    {diagResult.centroid_y.toFixed(3)}
+                  <p className="text-white font-mono font-bold">{diagResult.centroid_y.toFixed(3)}</p>
+                </div>
+                <div className="bg-slate-900 rounded p-1 text-center">
+                  <p className="text-slate-500 text-xs">spread</p>
+                  <p className={`font-mono font-bold ${diagResult.y_spread > diagResult.frame_h * 0.12 ? 'text-red-400' : 'text-slate-300'}`}>
+                    {diagResult.y_spread}px
                   </p>
                 </div>
               </div>
@@ -164,11 +168,12 @@ export function OcrDebugPanel() {
 
             {/* 判定サマリー */}
             <div className={`rounded-lg p-2 text-xs break-all ${
-              diagResult.detection_summary.startsWith('WIN') ? 'bg-green-900/40 border border-green-700 text-green-300' :
-              diagResult.detection_summary.startsWith('LOSE') ? 'bg-yellow-900/40 border border-yellow-700 text-yellow-300' :
+              diagResult.detection_summary.includes('✓ WIN') ? 'bg-green-900/40 border border-green-700 text-green-300' :
+              diagResult.detection_summary.includes('✓ LOSE') ? 'bg-yellow-900/40 border border-yellow-700 text-yellow-300' :
+              diagResult.detection_summary.includes('Phase 1 ✓') ? 'bg-blue-900/40 border border-blue-700 text-blue-300' :
               'bg-slate-800 border border-slate-600 text-slate-400'
             }`}>
-              <span className="font-semibold">判定: </span>{diagResult.detection_summary}
+              {diagResult.detection_summary}
             </div>
           </div>
         )}

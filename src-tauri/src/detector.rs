@@ -1,12 +1,12 @@
 /// InkGraph — リザルト検知モジュール
 ///
-/// 検知方式:
-/// 1. WIN_ROI への OCR で「WIN!」テキストを確認 → リザルト画面か判定
-/// 2. 黄色プレイヤー矢印（▶）をピクセルカラーでスキャン
-/// 3. 矢印が WIN パネル側か LOSE パネル側かで勝敗を判定
-/// 4. 矢印の y 重心を DetectionResult に含め extractor が行位置を特定できるようにする
-///
-/// ROI 座標はバンカラマッチ / Xマッチ 1456×816 スクリーンショットで実測 (2026-05-28)。
+/// 検知方式 (2フェーズ):
+///   Phase 1 (WaitingForBattle):
+///     「バトルを開始します！」テキストを OCR で検知 → Phase 2 へ移行
+///     ロビー・試合中など、バトル開始前の誤検知をここで排除する
+///   Phase 2 (BattleInProgress):
+///     黄色プレイヤー矢印 (▶) のピクセルスキャンで WIN/LOSE 判定 → Phase 1 へ戻る
+///     バトルが確定した後のみリザルト検知を行う
 
 use crate::{
     capture::CapturedFrame,
@@ -15,52 +15,20 @@ use crate::{
 use anyhow::Result;
 
 // ---------------------------------------------------------------------------
-// デバッグ診断
-// ---------------------------------------------------------------------------
-
-/// フレームに対して検知パイプラインを一度だけ実行し、診断情報を返す。
-/// クールダウンなし・副作用なし。
-pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::CaptureDebugResult> {
-    let win_roi_text = ocr_roi(frame, &WIN_ROI, "en-US")
-        .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
-    let win_text_found = win_roi_text.contains("WIN");
-    let (yellow_win_px, yellow_lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
-    let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
-    let spread_ok  = y_spread <= max_spread;
-
-    let detection_summary = if !spread_ok {
-        format!("NOT_DETECTED — spread={y_spread}px > max={max_spread}px (分散した黄色、矢印ではない)")
-    } else if yellow_win_px >= MIN_YELLOW_PIXELS {
-        format!("WIN (win_px={yellow_win_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
-    } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
-        format!("LOSE (lose_px={yellow_lose_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
-    } else {
-        format!(
-            "NOT_DETECTED — 黄色ピクセル不足 (win={yellow_win_px} lose={yellow_lose_px} < threshold={MIN_YELLOW_PIXELS}, spread={y_spread}px)"
-        )
-    };
-
-    Ok(crate::types::CaptureDebugResult {
-        frame_w: frame.width,
-        frame_h: frame.height,
-        win_roi_text,
-        win_text_found,
-        yellow_win_px,
-        yellow_lose_px,
-        centroid_y,
-        detection_summary,
-    })
-}
-
-// ---------------------------------------------------------------------------
 // ROI 定義 (16:9 フレームに対する比率)
 // ---------------------------------------------------------------------------
-//
-// 実測: バンカラマッチ 1456×816 スクショ (2026-05-27)
-// Xマッチ / バンカラ / ナワバリで共通レイアウト
 
-/// WIN! バナー領域 — debug_detect_frame の診断用のみ。
-/// WinRT OCR はスタイル化フォントを認識できないため detect() では使用しない。
+/// 「バトルを開始します！」テキスト領域
+/// 白テキストが黒い巻物背景に表示される — OCR で確実に読める
+const BATTLE_START_ROI: Roi = Roi {
+    x_ratio: 0.25,
+    y_ratio: 0.36,
+    w_ratio: 0.50,
+    h_ratio: 0.20,
+};
+
+/// WIN! バナー領域 — debug_detect_frame の診断用のみ
+/// WinRT OCR はスタイル化フォントを認識できないため detect() では使用しない
 const WIN_ROI: Roi = Roi {
     x_ratio: 0.455,
     y_ratio: 0.267,
@@ -71,16 +39,13 @@ const WIN_ROI: Roi = Roi {
 /// プレイヤー矢印スキャン領域 (黄色 ▶ が表示される x 帯)
 const ARROW_X_START: f32 = 0.455;
 const ARROW_X_END:   f32 = 0.505;
-const ARROW_Y_START: f32 = 0.270; // WIN パネル先頭行より上
-const ARROW_Y_END:   f32 = 0.940; // LOSE パネル末尾行より下
+const ARROW_Y_START: f32 = 0.270;
+const ARROW_Y_END:   f32 = 0.940;
 
 /// WIN パネルと LOSE パネルの境界 y 比率
-/// 実測: LOSE...ヘッダーは y ≈ 510px / 816px ≈ 0.625
-/// 旧値 0.570 だと WIN 4番手行(y≈465px)が LOSE と誤判定されるため修正
 const PANEL_BOUNDARY_Y: f32 = 0.630;
 
-/// 黄色矢印と判定する最小ピクセル数
-/// リザルト画面では 350+ px が観測されるため 100 で誤検知を防ぎつつ確実に検出できる
+/// 黄色矢印と判定する最小ピクセル数 (リザルト画面では 350+ px)
 const MIN_YELLOW_PIXELS: u32 = 100;
 
 /// 黄色ピクセルの y 方向スプレッド上限 (フレーム高さに対する比率)
@@ -113,11 +78,14 @@ impl Roi {
 // 検知エンジン
 // ---------------------------------------------------------------------------
 
-/// 検知器の状態
-/// Idle: リザルト画面待機中
-/// Locked: 検知済み → 画面が消えるまで再検知しない (重複防止)
+#[derive(Debug, PartialEq)]
+enum DetectorPhase {
+    WaitingForBattle,
+    BattleInProgress,
+}
+
 pub struct ResultDetector {
-    locked: bool,
+    phase: DetectorPhase,
 }
 
 /// 検知結果。Win/Lose には矢印の y 重心比率を持たせ、
@@ -148,64 +116,117 @@ impl DetectionResult {
 
 impl ResultDetector {
     pub fn new(_cooldown_secs: u64) -> Self {
-        Self { locked: false }
+        Self { phase: DetectorPhase::WaitingForBattle }
     }
 
-    /// フレームから WIN/LOSE を検知する (状態機械方式)。
-    ///
-    /// Idle: 黄色ピクセルが閾値以上かつスプレッドが小さければ検知して Locked へ。
-    /// Locked: ピクセルが閾値を下回るまで再検知しない (画面開きっぱなし防止)。
+    /// 2フェーズ検知。detect() は blocking OCR を含むため、
+    /// 呼び出し元は tokio::task::block_in_place でラップすること。
     pub fn detect(&mut self, frame: &CapturedFrame) -> Result<DetectionResult> {
-        let (win_px, lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
-        let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
+        match self.phase {
+            DetectorPhase::WaitingForBattle => {
+                // 「バトルを開始します！」が見えたら試合中フラグを立てる
+                let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
+                    .unwrap_or_default();
+                if text.contains("バトル") || text.contains("開始") {
+                    self.phase = DetectorPhase::BattleInProgress;
+                    log::info!("[detector] battle start detected → BattleInProgress");
+                }
+                Ok(DetectionResult::NotDetected)
+            }
 
-        let on_screen = (win_px >= MIN_YELLOW_PIXELS || lose_px >= MIN_YELLOW_PIXELS)
-            && y_spread <= max_spread;
+            DetectorPhase::BattleInProgress => {
+                let (win_px, lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
+                let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
 
-        if !on_screen {
-            // リザルト画面が消えたのでロック解除
-            self.locked = false;
-            return Ok(DetectionResult::NotDetected);
+                // 黄色矢印が見えなければ待機継続
+                if (win_px < MIN_YELLOW_PIXELS && lose_px < MIN_YELLOW_PIXELS)
+                    || y_spread > max_spread
+                {
+                    return Ok(DetectionResult::NotDetected);
+                }
+
+                // リザルト検知 → Phase 1 へ戻す (次の試合まで再検知しない)
+                self.phase = DetectorPhase::WaitingForBattle;
+                let result = if win_px >= lose_px {
+                    DetectionResult::Win  { arrow_y_ratio: centroid_y }
+                } else {
+                    DetectionResult::Lose { arrow_y_ratio: centroid_y }
+                };
+                log::info!(
+                    "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} spread={y_spread} arrow_y={centroid_y:.3})",
+                    result.result_str()
+                );
+                Ok(result)
+            }
         }
-
-        if self.locked {
-            // 画面は出ているが既に記録済み
-            return Ok(DetectionResult::NotDetected);
-        }
-
-        // 新規検知 → ロック
-        self.locked = true;
-        let result = if win_px >= MIN_YELLOW_PIXELS {
-            DetectionResult::Win  { arrow_y_ratio: centroid_y }
-        } else {
-            DetectionResult::Lose { arrow_y_ratio: centroid_y }
-        };
-        log::info!(
-            "[detector] {:?} detected (win_px={win_px} lose_px={lose_px} spread={y_spread} arrow_y={centroid_y:.3})",
-            result.result_str()
-        );
-        Ok(result)
     }
+}
+
+// ---------------------------------------------------------------------------
+// デバッグ診断 (1フレーム one-shot)
+// ---------------------------------------------------------------------------
+
+/// フレームに対して両フェーズの診断情報をまとめて返す。状態変更なし。
+pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::CaptureDebugResult> {
+    // Phase 1: バトル開始テキスト
+    let battle_start_text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
+        .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
+    let battle_start_found =
+        battle_start_text.contains("バトル") || battle_start_text.contains("開始");
+
+    // Phase 2: 黄色矢印 (参考情報)
+    let win_roi_text = ocr_roi_raw(frame, &WIN_ROI, "en-US")
+        .map(|t| t.to_uppercase())
+        .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
+    let win_text_found = win_roi_text.contains("WIN");
+
+    let (yellow_win_px, yellow_lose_px, centroid_y, y_spread) = count_yellow_arrow_pixels(frame);
+    let max_spread = (frame.height as f32 * MAX_Y_SPREAD_RATIO) as u32;
+    let spread_ok  = y_spread <= max_spread;
+
+    let detection_summary = if battle_start_found {
+        "Phase 1 ✓ バトル開始検出 → BattleInProgress へ移行".to_string()
+    } else if !spread_ok {
+        format!("Phase 2: NOT_DETECTED — spread={y_spread}px > max={max_spread}px (矢印ではない)")
+    } else if yellow_win_px >= MIN_YELLOW_PIXELS {
+        format!("Phase 2 ✓ WIN (win_px={yellow_win_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
+    } else if yellow_lose_px >= MIN_YELLOW_PIXELS {
+        format!("Phase 2 ✓ LOSE (lose_px={yellow_lose_px}, spread={y_spread}px, centroid_y={centroid_y:.3})")
+    } else {
+        format!("Phase 2: NOT_DETECTED (win={yellow_win_px} lose={yellow_lose_px} spread={y_spread}px < threshold={MIN_YELLOW_PIXELS})")
+    };
+
+    Ok(crate::types::CaptureDebugResult {
+        frame_w: frame.width,
+        frame_h: frame.height,
+        battle_start_text,
+        battle_start_found,
+        win_roi_text,
+        win_text_found,
+        yellow_win_px,
+        yellow_lose_px,
+        centroid_y,
+        y_spread,
+        detection_summary,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // 内部ヘルパー
 // ---------------------------------------------------------------------------
 
-/// ROI を切り出して OCR し、大文字テキストを返す
-fn ocr_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
+/// ROI を切り出して OCR し、生テキストをそのまま返す
+fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
     let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
     let result = ocr_from_bgra(&cropped, w, h, Some(lang))?;
-    Ok(result.text.to_uppercase())
+    Ok(result.text)
 }
 
-/// 黄色プレイヤー矢印（▶）のピクセルを WIN/LOSE 各エリアでカウントする。
+/// 黄色プレイヤー矢印 (▶) のピクセルを WIN/LOSE 各エリアでカウントする。
 ///
 /// 黄色判定: R > 200, G > 170, B < 80
 /// 戻り値: (win_count, lose_count, centroid_y_ratio, y_spread_px)
-///   y_spread_px: 黄色ピクセルの y 方向の広がり (max_y - min_y)
-///   矢印なら小さく、ゲームプレイ中の分散した黄色なら大きくなる
 fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
     let w = frame.width;
     let h = frame.height;
@@ -226,9 +247,7 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
     for y in y0..y1.min(h) {
         for x in x0..x1.min(w) {
             let idx = ((y * w + x) * 4) as usize;
-            if idx + 2 >= frame.bgra.len() {
-                continue;
-            }
+            if idx + 2 >= frame.bgra.len() { continue; }
             let b = frame.bgra[idx];
             let g = frame.bgra[idx + 1];
             let r = frame.bgra[idx + 2];
@@ -262,7 +281,7 @@ pub fn crop_bgra(bgra: &[u8], full_width: u32, x: u32, y: u32, w: u32, h: u32) -
     for row in 0..h {
         let src_y = y + row;
         let row_start = ((src_y * full_width + x) * 4) as usize;
-        let row_end = row_start + (w * 4) as usize;
+        let row_end   = row_start + (w * 4) as usize;
         if row_end <= bgra.len() {
             out.extend_from_slice(&bgra[row_start..row_end]);
         }
@@ -282,8 +301,8 @@ mod tests {
     fn test_crop_bgra_basic() {
         let mut data = vec![0u8; 4 * 4 * 4];
         let idx = ((2 * 4 + 2) * 4) as usize;
-        data[idx + 2] = 255; // R
-        data[idx + 3] = 255; // A
+        data[idx + 2] = 255;
+        data[idx + 3] = 255;
         let crop = crop_bgra(&data, 4, 2, 2, 2, 2);
         assert_eq!(crop.len(), 16);
         assert_eq!(crop[2], 255);
@@ -299,55 +318,41 @@ mod tests {
 
     #[test]
     fn test_panel_boundary_pixels() {
-        // 1456×816 で LOSE...ヘッダーは y≈510px → boundary は 480〜560 の間
         let y_mid = (PANEL_BOUNDARY_Y * 816.0) as u32;
-        assert!(y_mid > 480, "boundary y={y_mid} too high (WIN row4 ≈ 465px)");
-        assert!(y_mid < 560, "boundary y={y_mid} too low (LOSE row1 ≈ 560px)");
+        assert!(y_mid > 480, "boundary y={y_mid} too high");
+        assert!(y_mid < 560, "boundary y={y_mid} too low");
     }
 
     #[test]
     fn test_yellow_pixel_threshold() {
-        // 黄色判定: R>200 G>170 B<80
-        let r: u8 = 230;
-        let g: u8 = 190;
-        let b: u8 = 50;
-        assert!(r > 200 && g > 170 && b < 80, "yellow threshold check");
-
-        // 非黄色 (白)
+        let (r, g, b) = (230u8, 190u8, 50u8);
+        assert!(r > 200 && g > 170 && b < 80);
         let (r2, g2, b2) = (255u8, 255u8, 255u8);
-        assert!(!(r2 > 200 && g2 > 170 && b2 < 80), "white should not be yellow");
-
-        // 非黄色 (緑 = LOSE パネル背景)
-        let (r3, g3, b3) = (100u8, 200u8, 80u8);
-        assert!(!(r3 > 200 && g3 > 170 && b3 < 80), "green should not be yellow");
+        assert!(!(r2 > 200 && g2 > 170 && b2 < 80));
     }
 
     #[test]
-    fn test_detector_initial_state() {
+    fn test_detector_initial_phase() {
         let det = ResultDetector::new(30);
-        assert!(det.last_detected_at.is_none());
+        assert_eq!(det.phase, DetectorPhase::WaitingForBattle);
     }
 
     #[test]
     fn test_count_yellow_arrow_win_area() {
-        // WIN エリア (y < PANEL_BOUNDARY_Y=0.630) に黄色ピクセルを配置
         let w = 100u32;
         let h = 100u32;
         let mut bgra = vec![0u8; (w * h * 4) as usize];
-
-        // ARROW_X_START*100=45..51, y=35 (< boundary*100=63)
         let px_x = 47u32;
         let px_y = 35u32;
         for dy in 0..5u32 {
             let idx = (((px_y + dy) * w + px_x) * 4) as usize;
-            bgra[idx]     = 30;  // B
-            bgra[idx + 1] = 190; // G
-            bgra[idx + 2] = 230; // R
-            bgra[idx + 3] = 255; // A
+            bgra[idx]     = 30;
+            bgra[idx + 1] = 190;
+            bgra[idx + 2] = 230;
+            bgra[idx + 3] = 255;
         }
-
         let frame = crate::capture::CapturedFrame { bgra, width: w, height: h };
-        let (win_px, lose_px, centroid_y) = count_yellow_arrow_pixels(&frame);
+        let (win_px, lose_px, centroid_y, _y_spread) = count_yellow_arrow_pixels(&frame);
         assert!(win_px >= 5, "expected win yellow pixels, got {win_px}");
         assert_eq!(lose_px, 0);
         assert!(centroid_y > 0.3 && centroid_y < 0.5, "centroid_y={centroid_y:.3}");
@@ -358,11 +363,9 @@ mod tests {
         let win  = DetectionResult::Win  { arrow_y_ratio: 0.44 };
         let lose = DetectionResult::Lose { arrow_y_ratio: 0.72 };
         let none = DetectionResult::NotDetected;
-
         assert_eq!(win.result_str(),  Some("win"));
         assert_eq!(lose.result_str(), Some("lose"));
         assert_eq!(none.result_str(), None);
-
         assert!((win.arrow_y_ratio().unwrap()  - 0.44).abs() < 1e-5);
         assert!((lose.arrow_y_ratio().unwrap() - 0.72).abs() < 1e-5);
         assert!(none.arrow_y_ratio().is_none());

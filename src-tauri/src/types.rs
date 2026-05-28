@@ -95,16 +95,22 @@ pub struct OcrTestResult {
 pub struct CaptureDebugResult {
     pub frame_w: u32,
     pub frame_h: u32,
-    /// WIN_ROI を OCR した生テキスト (大文字正規化済み)
+    /// Phase 1: 「バトルを開始します！」ROI の OCR 生テキスト
+    pub battle_start_text: String,
+    /// Phase 1: バトル開始テキストが見つかったか
+    pub battle_start_found: bool,
+    /// Phase 2 参考: WIN_ROI OCR テキスト (大文字)
     pub win_roi_text: String,
-    /// "WIN" テキストが見つかったか
+    /// Phase 2 参考: WIN テキストが見つかったか
     pub win_text_found: bool,
-    /// WIN パネル側の黄色矢印ピクセル数
+    /// Phase 2: WIN パネル側の黄色矢印ピクセル数
     pub yellow_win_px: u32,
-    /// LOSE パネル側の黄色矢印ピクセル数
+    /// Phase 2: LOSE パネル側の黄色矢印ピクセル数
     pub yellow_lose_px: u32,
-    /// 黄色ピクセルの y 重心 (0.0–1.0)
+    /// Phase 2: 黄色ピクセルの y 重心 (0.0–1.0)
     pub centroid_y: f32,
+    /// Phase 2: 黄色ピクセルの y スプレッド (px)
+    pub y_spread: u32,
     /// 判定サマリー文字列
     pub detection_summary: String,
 }

@@ -97,7 +97,8 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
             log::debug!("[capture_loop] frame #{frame_count} {}x{}", frame.width, frame.height);
         }
 
-        let detection = match detector.detect(&frame) {
+        // detect() は Phase 1 で OCR (blocking) を呼ぶため block_in_place でラップ
+        let detection = match tokio::task::block_in_place(|| detector.detect(&frame)) {
             Ok(d) => d,
             Err(e) => {
                 log::warn!("[capture_loop] detection error: {e}");

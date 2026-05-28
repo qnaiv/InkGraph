@@ -46,11 +46,14 @@ export interface CaptureStatusPayload {
 export interface CaptureDebugResult {
   frame_w: number;
   frame_h: number;
+  battle_start_text: string;
+  battle_start_found: boolean;
   win_roi_text: string;
   win_text_found: boolean;
   yellow_win_px: number;
   yellow_lose_px: number;
   centroid_y: number;
+  y_spread: number;
   detection_summary: string;
 }
 
