@@ -5,6 +5,7 @@ import { Header } from './components/Header';
 import { XpChart } from './components/XpChart';
 import { MatchList } from './components/MatchList';
 import { OcrDebugPanel } from './components/OcrDebugPanel';
+import { SessionStats } from './components/SessionStats';
 import { useMatches } from './hooks/useMatches';
 import type { Rule } from './types';
 import './App.css';
@@ -52,7 +53,11 @@ export default function App() {
               )}
             </h2>
           </div>
-          <div className="flex-1 overflow-y-auto px-3 py-3">
+          {/* 今日のセッション統計 */}
+          <div className="pt-2">
+            <SessionStats matches={matches} />
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 py-1">
             <MatchList
               matches={matches}
               isLoading={isLoading}

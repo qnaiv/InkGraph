@@ -40,7 +40,7 @@ export function OcrDebugPanel() {
     try {
       const list = await invoke<WindowInfo[]>('list_windows');
       setWindows(list);
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
   };
 
   const runDiag = async () => {
@@ -173,6 +173,27 @@ export function OcrDebugPanel() {
                   <p className="text-slate-500 text-xs">spread</p>
                   <p className="text-slate-300 font-mono font-bold">
                     {diagResult.y_spread}px
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* ルール・ステージ OCR */}
+            <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1.5">
+              <p className="text-slate-400 font-semibold">ルール / ステージ OCR</p>
+              <div className="flex gap-2">
+                <div className="flex-1 bg-slate-900 rounded p-1.5">
+                  <p className="text-slate-500 text-xs mb-0.5">ルール (raw)</p>
+                  <p className="text-white font-mono break-all">{diagResult.rule_ocr_text || '(空)'}</p>
+                  <p className={`text-xs mt-0.5 ${diagResult.rule_normalized ? 'text-green-400' : 'text-slate-500'}`}>
+                    → {diagResult.rule_normalized ?? '未マッチ'}
+                  </p>
+                </div>
+                <div className="flex-1 bg-slate-900 rounded p-1.5">
+                  <p className="text-slate-500 text-xs mb-0.5">ステージ (raw)</p>
+                  <p className="text-white font-mono break-all">{diagResult.stage_ocr_text || '(空)'}</p>
+                  <p className={`text-xs mt-0.5 ${diagResult.stage_normalized ? 'text-green-400' : 'text-slate-500'}`}>
+                    → {diagResult.stage_normalized ?? '未マッチ'}
                   </p>
                 </div>
               </div>

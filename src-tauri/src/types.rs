@@ -105,6 +105,14 @@ pub struct CaptureDebugResult {
     pub win_grey_rows: u32,
     /// Phase 2: リザルト画面判定 — LOSE 側グレー行数 (4行中)
     pub lose_grey_rows: u32,
+    /// Phase 2: ルール ROI の OCR 生テキスト
+    pub rule_ocr_text: String,
+    /// Phase 2: ルール正規化結果
+    pub rule_normalized: Option<String>,
+    /// Phase 2: ステージ ROI の OCR 生テキスト
+    pub stage_ocr_text: String,
+    /// Phase 2: ステージ正規化結果
+    pub stage_normalized: Option<String>,
     /// Phase 2 参考: WIN_ROI OCR テキスト (大文字)
     pub win_roi_text: String,
     /// Phase 2 参考: WIN テキストが見つかったか

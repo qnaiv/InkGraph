@@ -56,6 +56,7 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     }
   }, [ruleFilter]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadMatches(); }, [loadMatches]);
 
   // ── Rust からのリアルタイム通知を購読 ───────────────────────

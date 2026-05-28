@@ -46,9 +46,15 @@ const RESULT_COLORS = {
   lose: '#f87171',  // red-400
 };
 
-function CustomDot(props: any) {
-  const { cx, cy, payload } = props;
-  const color = RESULT_COLORS[payload.result as 'win' | 'lose'];
+interface CustomDotProps {
+  cx?: number;
+  cy?: number;
+  payload?: ChartDataPoint;
+}
+
+function CustomDot({ cx, cy, payload }: CustomDotProps) {
+  if (cx == null || cy == null || !payload) return null;
+  const color = RESULT_COLORS[payload.result];
   return (
     <circle
       cx={cx}
@@ -61,9 +67,14 @@ function CustomDot(props: any) {
   );
 }
 
-function CustomTooltip({ active, payload }: any) {
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{ payload: ChartDataPoint }>;
+}
+
+function CustomTooltip({ active, payload }: CustomTooltipProps) {
   if (!active || !payload?.length) return null;
-  const d = payload[0].payload as ChartDataPoint;
+  const d = payload[0].payload;
   return (
     <div className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm shadow-xl">
       <p className="text-slate-300">{d.date}</p>
