@@ -12,6 +12,7 @@
 
 use crate::{
     capture::CapturedFrame,
+    extractor::{extract_rule_raw, extract_stage_raw, normalize_rule, normalize_stage},
     ocr::{ocr_from_bgra, preprocess_bgra},
 };
 use anyhow::Result;
@@ -232,6 +233,12 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         format!("Phase 2: NOT_DETECTED (WIN_grey={win_grey_rows} LOSE_grey={lose_grey_rows} win_px={yellow_win_px} lose_px={yellow_lose_px})")
     };
 
+    // Phase 2: ルール・ステージ OCR (リザルト画面上部から読む)
+    let rule_ocr_text  = extract_rule_raw(frame);
+    let stage_ocr_text = extract_stage_raw(frame);
+    let rule_normalized  = normalize_rule(&rule_ocr_text);
+    let stage_normalized = normalize_stage(&stage_ocr_text);
+
     Ok(crate::types::CaptureDebugResult {
         frame_w: frame.width,
         frame_h: frame.height,
@@ -242,6 +249,10 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         win_text_found,
         win_grey_rows,
         lose_grey_rows,
+        rule_ocr_text,
+        rule_normalized,
+        stage_ocr_text,
+        stage_normalized,
         yellow_win_px,
         yellow_lose_px,
         centroid_y,
