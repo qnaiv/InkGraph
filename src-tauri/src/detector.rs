@@ -49,6 +49,10 @@ const PANEL_BOUNDARY_Y: f32 = 0.630;
 /// 黄色矢印と判定する最小ピクセル数 (リザルト画面では 350+ px)
 const MIN_YELLOW_PIXELS: u32 = 100;
 
+/// バトル開始検知後のクールダウン秒数
+/// バナー画面(~15s) + ロード(~5s) + カウントダウン(~5s) ≈ 25s を超える値に設定する
+const BATTLE_START_COOLDOWN_SECS: u64 = 30;
+
 /// 黄色ピクセルの y 方向スプレッド上限 (フレーム高さに対する比率)
 /// チーム4人分の▶矢印が複数行に分散するため 30% まで許容する
 const MAX_Y_SPREAD_RATIO: f32 = 0.30;
@@ -151,7 +155,7 @@ impl ResultDetector {
 
                 if dark_scroll || ocr_hit {
                     self.phase = DetectorPhase::BattleInProgress {
-                        eligible_after: Instant::now() + Duration::from_secs(10),
+                        eligible_after: Instant::now() + Duration::from_secs(BATTLE_START_COOLDOWN_SECS),
                     };
                     log::info!(
                         "[detector] battle start detected (dark_scroll={dark_scroll} ocr={ocr_hit}) → BattleInProgress (eligible in 10s)"
