@@ -97,8 +97,10 @@ pub struct CaptureDebugResult {
     pub frame_h: u32,
     /// Phase 1: 「バトルを開始します！」ROI の OCR 生テキスト
     pub battle_start_text: String,
-    /// Phase 1: バトル開始テキストが見つかったか
+    /// Phase 1: バトル開始テキストが見つかったか (OCR または暗巻物)
     pub battle_start_found: bool,
+    /// Phase 1: 暗い巻物ピクセルで検出したか
+    pub dark_scroll_found: bool,
     /// Phase 2 参考: WIN_ROI OCR テキスト (大文字)
     pub win_roi_text: String,
     /// Phase 2 参考: WIN テキストが見つかったか

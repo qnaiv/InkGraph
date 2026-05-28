@@ -127,10 +127,15 @@ export function OcrDebugPanel() {
             {/* Phase 1: バトル開始 */}
             <div className="bg-slate-800 rounded-lg p-2 text-xs">
               <div className="flex justify-between mb-1">
-                <span className="text-slate-400">Phase 1: バトル開始テキスト</span>
-                <span className={diagResult.battle_start_found ? 'text-green-400' : 'text-slate-500'}>
-                  {diagResult.battle_start_found ? '✓ 検出' : '✗ 未検出'}
-                </span>
+                <span className="text-slate-400">Phase 1: バトル開始</span>
+                <div className="flex gap-2">
+                  <span className={diagResult.dark_scroll_found ? 'text-green-400' : 'text-slate-600'}>
+                    {diagResult.dark_scroll_found ? '✓ 暗巻物' : '✗ 暗巻物'}
+                  </span>
+                  <span className={diagResult.battle_start_found ? 'text-green-400' : 'text-slate-500'}>
+                    {diagResult.battle_start_found ? '✓ 検出' : '✗ 未検出'}
+                  </span>
+                </div>
               </div>
               <pre className="text-slate-300 text-xs whitespace-pre-wrap break-all max-h-16 overflow-y-auto bg-slate-900 rounded p-1">
                 {diagResult.battle_start_text || '(空)'}

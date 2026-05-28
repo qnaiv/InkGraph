@@ -50,8 +50,8 @@ const PANEL_BOUNDARY_Y: f32 = 0.630;
 const MIN_YELLOW_PIXELS: u32 = 100;
 
 /// 黄色ピクセルの y 方向スプレッド上限 (フレーム高さに対する比率)
-/// 矢印 (▶) は集中した小領域のはずなので 12% 超なら別物と判断する
-const MAX_Y_SPREAD_RATIO: f32 = 0.12;
+/// チーム4人分の▶矢印が複数行に分散するため 30% まで許容する
+const MAX_Y_SPREAD_RATIO: f32 = 0.30;
 
 // ---------------------------------------------------------------------------
 // Roi 構造体
@@ -133,16 +133,29 @@ impl ResultDetector {
 
         match self.phase {
             DetectorPhase::WaitingForBattle => {
-                // WinRT OCR は日本語文字間にスペースを挿入する場合がある ("開 始" など)
-                // → スペースを除去してから照合する。"開" が欠落する場合もあるので複数キーワードで対応。
-                let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
-                    .unwrap_or_default()
-                    .replace(char::is_whitespace, "");
-                if text.contains("バトル") || text.contains("開始") || text.contains("始します") {
+                // Phase 1a: ピクセル判定 (高速) — 巻物の暗い背景を検出
+                // OCR より速く、フォント依存しないためフォールバックとして機能する
+                let dark_scroll = detect_dark_scroll(frame);
+
+                let ocr_hit = if dark_scroll {
+                    false // ピクセル判定で確定済み → OCR をスキップ
+                } else {
+                    // Phase 1b: OCR フォールバック
+                    // WinRT OCR は日本語文字間にスペースを挿入する場合がある ("開 始" など)
+                    // → スペースを除去してから照合する。"開" が欠落する場合もあるので複数キーワードで対応。
+                    let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
+                        .unwrap_or_default()
+                        .replace(char::is_whitespace, "");
+                    text.contains("バトル") || text.contains("開始") || text.contains("始します")
+                };
+
+                if dark_scroll || ocr_hit {
                     self.phase = DetectorPhase::BattleInProgress {
                         eligible_after: Instant::now() + Duration::from_secs(10),
                     };
-                    log::info!("[detector] battle start detected → BattleInProgress (eligible in 10s)");
+                    log::info!(
+                        "[detector] battle start detected (dark_scroll={dark_scroll} ocr={ocr_hit}) → BattleInProgress (eligible in 10s)"
+                    );
                 }
                 Ok(DetectionResult::NotDetected)
             }
@@ -182,14 +195,17 @@ impl ResultDetector {
 
 /// フレームに対して両フェーズの診断情報をまとめて返す。状態変更なし。
 pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::CaptureDebugResult> {
-    // Phase 1: バトル開始テキスト
+    // Phase 1a: 暗巻物ピクセル判定
+    let dark_scroll_found = detect_dark_scroll(frame);
+
+    // Phase 1b: バトル開始テキスト OCR
     let battle_start_text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
         .unwrap_or_else(|e| format!("OCR_ERROR: {e}"));
-    // WinRT OCR は文字間にスペースを挿入するため除去して照合
     let battle_start_clean = battle_start_text.replace(char::is_whitespace, "");
-    let battle_start_found = battle_start_clean.contains("バトル")
+    let ocr_found = battle_start_clean.contains("バトル")
         || battle_start_clean.contains("開始")
         || battle_start_clean.contains("始します");
+    let battle_start_found = dark_scroll_found || ocr_found;
 
     // Phase 2: 黄色矢印 (参考情報)
     let win_roi_text = ocr_roi_raw(frame, &WIN_ROI, "en-US")
@@ -202,7 +218,8 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
     let spread_ok  = y_spread <= max_spread;
 
     let detection_summary = if battle_start_found {
-        "Phase 1 ✓ バトル開始検出 → BattleInProgress へ移行".to_string()
+        let method = if dark_scroll_found { "暗巻物" } else { "OCR" };
+        format!("Phase 1 ✓ バトル開始検出 ({method}) → BattleInProgress へ移行")
     } else if !spread_ok {
         format!("Phase 2: NOT_DETECTED — spread={y_spread}px > max={max_spread}px (矢印ではない)")
     } else if yellow_win_px >= MIN_YELLOW_PIXELS {
@@ -218,6 +235,7 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         frame_h: frame.height,
         battle_start_text,
         battle_start_found,
+        dark_scroll_found,
         win_roi_text,
         win_text_found,
         yellow_win_px,
@@ -240,6 +258,29 @@ fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     let processed = preprocess_bgra(&cropped, w, h);
     let result = ocr_from_bgra(&processed, w, h, Some(lang))?;
     Ok(result.text)
+}
+
+/// 「バトルを開始します！」画面に現れる暗い巻物背景をピクセルで検出する。
+///
+/// BATTLE_START_ROI 内で輝度 < 40 のピクセルが 25% 以上あれば true を返す。
+/// OCR に依存しないため、フォントが読めない状況でも確実に動作する。
+fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
+    let (x0, y0, w, h) = BATTLE_START_ROI.to_pixels(frame.width, frame.height);
+    let mut dark = 0u32;
+    let mut total = 0u32;
+    for row in 0..h {
+        for col in 0..w {
+            let idx = (((y0 + row) * frame.width + x0 + col) * 4) as usize;
+            if idx + 2 >= frame.bgra.len() { continue; }
+            let b = frame.bgra[idx]     as u32;
+            let g = frame.bgra[idx + 1] as u32;
+            let r = frame.bgra[idx + 2] as u32;
+            total += 1;
+            // 輝度 ≈ 0.299R + 0.587G + 0.114B (整数近似)
+            if (299 * r + 587 * g + 114 * b) / 1000 < 40 { dark += 1; }
+        }
+    }
+    total > 0 && dark * 100 / total >= 25
 }
 
 /// 黄色プレイヤー矢印 (▶) のピクセルを WIN/LOSE 各エリアでカウントする。
