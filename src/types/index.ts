@@ -51,6 +51,10 @@ export interface CaptureDebugResult {
   dark_scroll_found: boolean;
   win_grey_rows: number;
   lose_grey_rows: number;
+  rule_ocr_text: string;
+  rule_normalized: string | null;
+  stage_ocr_text: string;
+  stage_normalized: string | null;
   win_roi_text: string;
   win_text_found: boolean;
   yellow_win_px: number;
