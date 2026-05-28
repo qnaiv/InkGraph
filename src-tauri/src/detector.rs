@@ -10,7 +10,7 @@
 
 use crate::{
     capture::CapturedFrame,
-    ocr::ocr_from_bgra,
+    ocr::{ocr_from_bgra, preprocess_bgra},
 };
 use anyhow::Result;
 use std::time::{Duration, Instant};
@@ -232,11 +232,13 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
 // 内部ヘルパー
 // ---------------------------------------------------------------------------
 
-/// ROI を切り出して OCR し、生テキストをそのまま返す
+/// ROI を切り出して OCR し、生テキストをそのまま返す。
+/// Otsu 二値化で文字を際立たせてから OCR に渡す。
 fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
     let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let result = ocr_from_bgra(&cropped, w, h, Some(lang))?;
+    let processed = preprocess_bgra(&cropped, w, h);
+    let result = ocr_from_bgra(&processed, w, h, Some(lang))?;
     Ok(result.text)
 }
 
