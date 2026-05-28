@@ -1,8 +1,8 @@
 /// IkaVision XP — キャプチャループ
 ///
-/// バックグラウンドタスクとして動作し、対象ウィンドウを監視します。
-/// WIN/LOSE を検知したらデータを抽出して DB に保存し、
-/// フロントエンドへイベントを送信します。
+/// `WindowCaptureSession` を一度だけ作成してループ全体で保持する。
+/// これにより WGC キャプチャインジケーターが点滅せず、
+/// フレームも安定して取得できる。
 
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -11,24 +11,17 @@ use crate::{
     types::CaptureStatusPayload,
 };
 
-/// キャプチャループのメインエントリポイント
 pub async fn run(app: AppHandle, state: AppState, window_title: String) {
     log::info!("[capture_loop] starting for window: {window_title}");
 
-    // ウィンドウタイトルを state に保存
     {
         let mut target = state.target_window.lock().await;
         *target = Some(window_title.clone());
     }
 
-    // キャプチャ状態をフロントエンドへ通知
     let _ = app.emit(
         "capture_status",
-        CaptureStatusPayload {
-            active: true,
-            fps: 0.0,
-            window_title: Some(window_title.clone()),
-        },
+        CaptureStatusPayload { active: true, fps: 0.0, window_title: Some(window_title.clone()) },
     );
 
     #[cfg(target_os = "windows")]
@@ -38,18 +31,12 @@ pub async fn run(app: AppHandle, state: AppState, window_title: String) {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // 非 Windows: ダミーループ (CI / 開発確認用)
         run_stub_loop(&app, &state).await;
     }
 
-    // 停止通知
     let _ = app.emit(
         "capture_status",
-        CaptureStatusPayload {
-            active: false,
-            fps: 0.0,
-            window_title: None,
-        },
+        CaptureStatusPayload { active: false, fps: 0.0, window_title: None },
     );
 
     log::info!("[capture_loop] stopped");
@@ -62,14 +49,13 @@ pub async fn run(app: AppHandle, state: AppState, window_title: String) {
 #[cfg(target_os = "windows")]
 async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str) {
     use crate::{
-        capture::capture_window_frame,
+        capture::WindowCaptureSession,
         db::new_match_from_ocr,
         detector::{DetectionResult, ResultDetector},
         extractor::extract_match_data,
         types::MatchDetectedPayload,
     };
 
-    // 対象ウィンドウの HWND を解決
     let hwnd = match find_hwnd_by_title(window_title) {
         Some(h) => h,
         None => {
@@ -78,30 +64,44 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
         }
     };
 
+    // セッションはループ外で一度だけ作成する (これがポイント)
+    let session = match tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd)) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[capture_loop] failed to create WGC session: {e}");
+            return;
+        }
+    };
+
     let mut detector = ResultDetector::new(30);
-    let interval = Duration::from_millis(200); // 5fps
+    let interval     = Duration::from_millis(200); // 5 fps
+    let mut frame_count: u64 = 0;
 
     loop {
-        // 停止チェック
         if !*state.is_capturing.lock().await {
             break;
         }
 
-        // フレーム取得
-        let frame = match capture_window_frame(hwnd) {
+        // フレーム取得 (ブロッキング処理を Tokio に伝える)
+        let frame = match tokio::task::block_in_place(|| session.get_frame()) {
             Ok(f) => f,
             Err(e) => {
-                log::warn!("[capture_loop] capture failed: {e}");
+                log::warn!("[capture_loop] get_frame failed: {e}");
                 tokio::time::sleep(interval).await;
                 continue;
             }
         };
 
+        frame_count += 1;
+        if frame_count % 25 == 0 {
+            log::debug!("[capture_loop] frame #{frame_count} {}x{}", frame.width, frame.height);
+        }
+
         // WIN/LOSE 検知
         let detection = match detector.detect(&frame) {
             Ok(d) => d,
             Err(e) => {
-                log::warn!("[capture_loop] detection failed: {e}");
+                log::warn!("[capture_loop] detection error: {e}");
                 tokio::time::sleep(interval).await;
                 continue;
             }
@@ -112,7 +112,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
             result => {
                 let result_str = if result == DetectionResult::Win { "win" } else { "lose" };
 
-                // データ抽出
                 match extract_match_data(&frame, result_str) {
                     Ok(data) => {
                         let match_record = new_match_from_ocr(
@@ -124,15 +123,10 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
                             data.rule,
                             data.stage,
                         );
-
                         log::info!("[capture_loop] match detected: {:?}", match_record);
-
                         let _ = app.emit(
                             "match_detected",
-                            MatchDetectedPayload {
-                                match_data: match_record,
-                                ocr_confidence: 1.0,
-                            },
+                            MatchDetectedPayload { match_data: match_record, ocr_confidence: 1.0 },
                         );
                     }
                     Err(e) => {
@@ -144,6 +138,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, window_title: &str)
 
         tokio::time::sleep(interval).await;
     }
+    // session は Drop で自動的に Close される
 }
 
 #[cfg(target_os = "windows")]
@@ -165,10 +160,8 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
     use crate::{db::new_match_from_ocr, types::MatchDetectedPayload};
 
     log::warn!("[capture_loop] running stub loop (non-Windows)");
-
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // ダミー試合データを送信
     let dummy = new_match_from_ocr(
         "win",
         Some(5),
@@ -178,20 +171,13 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
         Some("ガチエリア".to_string()),
         Some("マテガイ放水路".to_string()),
     );
-
     let _ = app.emit(
         "match_detected",
-        MatchDetectedPayload {
-            match_data: dummy,
-            ocr_confidence: 0.0,
-        },
+        MatchDetectedPayload { match_data: dummy, ocr_confidence: 0.0 },
     );
 
-    // その後は停止を待つ
     loop {
-        if !*state.is_capturing.lock().await {
-            break;
-        }
+        if !*state.is_capturing.lock().await { break; }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
