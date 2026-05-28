@@ -70,8 +70,8 @@ mod windows_impl {
             }
 
             // 子ウィンドウを除外 (親がある = 別ウィンドウの一部)
-            let parent = GetParent(hwnd);
-            if !parent.0.is_null() {
+            // GetParent は Result<HWND> を返す: Ok(null) = 親なし, Ok(非null) = 子ウィンドウ
+            if matches!(GetParent(hwnd), Ok(p) if !p.0.is_null()) {
                 return BOOL(1);
             }
 

@@ -47,7 +47,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
         db::new_match_from_ocr,
-        detector::{DetectionResult, ResultDetector},
+        detector::ResultDetector,
         extractor::extract_match_data,
         types::MatchDetectedPayload,
     };
