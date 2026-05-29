@@ -141,18 +141,18 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                         }
                     };
 
-                    // ResultWin / ResultLose が確信度 0.70 以上で検出されたか
-                    let result_class = YoloDetector::best_detection(&dets, YoloClass::ResultWin)
+                    // MyPlayerRow が確信度 0.70 以上で検出されたか確認
+                    // → y 中心が PANEL_BOUNDARY_Y_RATIO より上 = WIN パネル内 = 勝ち
+                    use crate::detector::PANEL_BOUNDARY_Y_RATIO;
+                    let result_opt = YoloDetector::best_detection(&dets, YoloClass::MyPlayerRow)
                         .filter(|d| d.confidence >= 0.70)
-                        .map(|_| YoloClass::ResultWin)
-                        .or_else(||
-                            YoloDetector::best_detection(&dets, YoloClass::ResultLose)
-                                .filter(|d| d.confidence >= 0.70)
-                                .map(|_| YoloClass::ResultLose)
-                        );
+                        .map(|d| {
+                            let y_center = (d.bbox.y1 + d.bbox.y2) / 2.0;
+                            if y_center < PANEL_BOUNDARY_Y_RATIO { "win" } else { "lose" }
+                        });
 
-                    if let Some(cls) = result_class {
-                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, cls)) {
+                    if let Some(result_str) = result_opt {
+                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str)) {
                             Ok(data) => {
                                 let id = pending_match_id.take();
                                 battle_started_at = None;

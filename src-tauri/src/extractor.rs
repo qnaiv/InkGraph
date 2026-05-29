@@ -25,20 +25,14 @@ use anyhow::Result;
 
 /// YOLO の検出結果を使ってリザルト画面から全データを抽出する。
 ///
-/// `result_class` は `YoloClass::ResultWin` または `YoloClass::ResultLose`。
+/// `result`: capture_loop が MyPlayerRow の y 座標から判定した "win" / "lose" 文字列。
 /// BBox が検出されなかった項目は `None` を返す (OCR 失敗扱い)。
 /// 呼び出し元は `tokio::task::block_in_place` でラップすること (OCR がブロッキング)。
 pub fn extract_from_yolo_detections(
-    frame:        &CapturedFrame,
-    detections:   &[Detection],
-    result_class: YoloClass,
+    frame:      &CapturedFrame,
+    detections: &[Detection],
+    result:     &str,           // "win" | "lose"  (capture_loop 側で判定済み)
 ) -> Result<ExtractedMatchData> {
-    let result = match result_class {
-        YoloClass::ResultWin  => "win",
-        YoloClass::ResultLose => "lose",
-        _                     => "lose",
-    };
-
     // ルール・ステージ・モード: BBox クロップ → 白文字抽出 → OCR → 正規化
     let rule  = extract_ocr_from_class(frame, detections, YoloClass::RuleText,  "ja-JP")
         .and_then(|t| normalize_rule(&t));
@@ -47,8 +41,8 @@ pub fn extract_from_yolo_detections(
     let mode  = extract_ocr_from_class(frame, detections, YoloClass::ModeText,  "ja-JP")
         .and_then(|t| normalize_mode(&t));
 
-    // KDA: PlayerKda BBox の y 中心 → 既存の固定列位置でクロップ → OCR
-    let kda_y = YoloDetector::best_detection(detections, YoloClass::PlayerKda)
+    // KDA: MyPlayerRow BBox の y 中心 → 固定列位置でクロップ → OCR
+    let kda_y = YoloDetector::best_detection(detections, YoloClass::MyPlayerRow)
         .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
         .unwrap_or(0.5);
     let (kill_count, assist_count, death_count) = extract_kda(frame, kda_y)?;

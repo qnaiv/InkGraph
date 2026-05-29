@@ -570,31 +570,42 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 /// YOLO モデルが検出するクラス (yolo_result.onnx の学習クラス順と一致させること)
+///
+/// 【設計方針】
+/// リザルト画面には WIN パネルと LOSE パネルが常に両方存在するため、
+/// "WIN パネル全体" を 1クラスにすると両パネルが毎回検出されて勝敗不明になる。
+/// そのため「自分のプレイヤー行 (MyPlayerRow)」を検出し、
+/// その y 座標がパネル境界線 (画面高さ約 63%) の上下どちらにあるかで勝敗を判定する。
+///
+/// アノテーション指針:
+///   MyPlayerRow: 黄色 ▶ マーカーがついた自分の 1行だけを囲む BBox
+///                (勝ちでも負けでも同じクラスでアノテーションする)
+///   RuleText / StageText / ModeText: テキスト部分だけを囲む BBox
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(usize)]
 pub enum YoloClass {
-    ResultWin   = 0, // WIN! パネル全体
-    ResultLose  = 1, // LOSE! パネル全体
-    RuleText    = 2, // ルール名テキスト (ガチエリア等)
-    StageText   = 3, // ステージ名テキスト
-    PlayerKda   = 4, // 自分のプレイヤー行 (K/D/SP を含む行)
-    ModeText    = 5, // モード名 (Xマッチ / バンカラ等)
+    MyPlayerRow = 0, // 自分のプレイヤー行 (黄色▶マーカー付き) ← 勝敗判定＋KDA取得に使う
+    RuleText    = 1, // ルール名テキスト (ガチエリア/ガチヤグラ等)
+    StageText   = 2, // ステージ名テキスト
+    ModeText    = 3, // モード名テキスト (Xマッチ / バンカラ等)
 }
+
+/// WIN/LOSE パネルの境界 y 比率 (画面高さに対する割合)
+/// MyPlayerRow の y 中心がこの値より小さければ WIN パネル内 → 勝ち
+pub const PANEL_BOUNDARY_Y_RATIO: f32 = 0.630;
 
 impl YoloClass {
     pub fn from_id(id: usize) -> Option<Self> {
         match id {
-            0 => Some(Self::ResultWin),
-            1 => Some(Self::ResultLose),
-            2 => Some(Self::RuleText),
-            3 => Some(Self::StageText),
-            4 => Some(Self::PlayerKda),
-            5 => Some(Self::ModeText),
+            0 => Some(Self::MyPlayerRow),
+            1 => Some(Self::RuleText),
+            2 => Some(Self::StageText),
+            3 => Some(Self::ModeText),
             _ => None,
         }
     }
 
-    pub fn num_classes() -> usize { 6 }
+    pub fn num_classes() -> usize { 4 }
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +763,7 @@ impl YoloDetector {
                 bbox: BBox { x1, y1, x2, y2 },
                 class_id:   max_class,
                 class_name: format!("{:?}", YoloClass::from_id(max_class)
-                    .unwrap_or(YoloClass::ResultWin)),
+                    .unwrap_or(YoloClass::MyPlayerRow)),
                 confidence: max_conf,
             });
         }
@@ -842,13 +853,14 @@ mod yolo_tests {
 
     #[test]
     fn test_yolo_class_num() {
-        assert_eq!(YoloClass::num_classes(), 6);
+        assert_eq!(YoloClass::num_classes(), 4);
     }
 
     #[test]
     fn test_yolo_class_from_id() {
-        assert_eq!(YoloClass::from_id(0), Some(YoloClass::ResultWin));
-        assert_eq!(YoloClass::from_id(4), Some(YoloClass::PlayerKda));
+        assert_eq!(YoloClass::from_id(0), Some(YoloClass::MyPlayerRow));
+        assert_eq!(YoloClass::from_id(1), Some(YoloClass::RuleText));
+        assert_eq!(YoloClass::from_id(3), Some(YoloClass::ModeText));
         assert!(YoloClass::from_id(99).is_none());
     }
 
