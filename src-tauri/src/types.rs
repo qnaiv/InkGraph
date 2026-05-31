@@ -19,8 +19,8 @@ pub struct Match {
     pub weapon: Option<String>,
     pub result: String, // "win" | "lose" | "in_progress"
     pub kill_count: Option<i64>,
-    pub assist_count: Option<i64>,
     pub death_count: Option<i64>,
+    pub special_count: Option<i64>,
     pub xp_after: Option<f64>,
     pub gold_award_count: Option<i64>,
     pub tags: Option<String>, // JSON 配列文字列
@@ -46,8 +46,8 @@ pub struct ExtractedMatchData {
     pub result: String,
     pub mode: Option<String>,
     pub kill_count: Option<i64>,
-    pub assist_count: Option<i64>,
     pub death_count: Option<i64>,
+    pub special_count: Option<i64>,
     pub xp_after: Option<f64>,
     pub rule: Option<String>,
     pub stage: Option<String>,

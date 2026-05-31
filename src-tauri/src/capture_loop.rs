@@ -155,7 +155,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                 battle_started_at = None;
                                 let match_record = new_match_from_ocr(
                                     id, &data.result,
-                                    data.kill_count, data.assist_count, data.death_count,
+                                    data.kill_count, data.death_count, data.special_count,
                                     data.xp_after, data.rule, data.stage, data.mode,
                                     data.gold_award_count,
                                 );
@@ -205,7 +205,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                             let id = pending_match_id.take();
                             let match_record = new_match_from_ocr(
                                 id, &data.result,
-                                data.kill_count, data.assist_count, data.death_count,
+                                data.kill_count, data.death_count, data.special_count,
                                 data.xp_after, data.rule, data.stage,
                                 None, // ピクセルパスではモードを取得しない
                                 None, // ピクセルパスでは金表彰取得なし

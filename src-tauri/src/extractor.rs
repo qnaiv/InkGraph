@@ -45,7 +45,7 @@ pub fn extract_from_yolo_detections(
     let kda_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
         .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
         .unwrap_or(0.5);
-    let (kill_count, assist_count, death_count) = extract_kda(frame, kda_y)?;
+    let (kill_count, death_count, special_count) = extract_kda(frame, kda_y)?;
 
     // GoldAward: 検出された BBox の数 = 取得した金表彰の枚数
     let gold_award_count = detections.iter()
@@ -56,8 +56,8 @@ pub fn extract_from_yolo_detections(
         result: result.to_string(),
         mode,
         kill_count,
-        assist_count,
         death_count,
+        special_count,
         xp_after: None, // フェーズ2 (Xパワー画面) で実装
         rule,
         stage,
@@ -109,7 +109,7 @@ pub fn extract_match_data(
     result:        &str,
     arrow_y_ratio: f32,
 ) -> Result<ExtractedMatchData> {
-    let (kill_count, assist_count, death_count) = extract_kda(frame, arrow_y_ratio)?;
+    let (kill_count, death_count, special_count) = extract_kda(frame, arrow_y_ratio)?;
     let xp_after = extract_xp(frame)?;
     let rule  = extract_rule(frame);
     let stage = extract_stage(frame);
@@ -118,8 +118,8 @@ pub fn extract_match_data(
         result: result.to_string(),
         mode: None, // 固定 ROI パスではモード取得なし
         kill_count,
-        assist_count,
         death_count,
+        special_count,
         xp_after,
         rule,
         stage,

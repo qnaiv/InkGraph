@@ -25,9 +25,9 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
   });
 
   const kda = [
-    match.kill_count  != null ? `${match.kill_count}K`  : null,
-    match.assist_count != null ? `${match.assist_count}A` : null,
-    match.death_count != null ? `${match.death_count}D`  : null,
+    match.kill_count    != null ? `${match.kill_count}K`    : null,
+    match.death_count   != null ? `${match.death_count}D`   : null,
+    match.special_count != null ? `${match.special_count}S` : null,
   ].filter(Boolean).join('/');
 
   const handleNoteBlur = () => {

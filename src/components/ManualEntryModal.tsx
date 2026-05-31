@@ -48,8 +48,8 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
   const [stage, setStage] = useState('');
   const [weapon, setWeapon] = useState<string | null>(null);
   const [kill, setKill] = useState('');
-  const [assist, setAssist] = useState('');
   const [death, setDeath] = useState('');
+  const [special, setSpecial] = useState('');
   const [xp, setXp] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [note, setNote] = useState('');
@@ -71,8 +71,8 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
       stage: stage || null,
       weapon: weapon || null,
       kill_count: kill !== '' ? parseInt(kill, 10) : null,
-      assist_count: assist !== '' ? parseInt(assist, 10) : null,
       death_count: death !== '' ? parseInt(death, 10) : null,
+      special_count: special !== '' ? parseInt(special, 10) : null,
       xp_after: xp !== '' ? parseFloat(xp) : null,
       tags: JSON.stringify(tags),
       note: note || null,
@@ -196,15 +196,15 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
             <WeaponPicker currentWeapon={weapon} onSelect={setWeapon} />
           </div>
 
-          {/* K/A/D */}
+          {/* K/D/S */}
           <div>
-            <label className="text-xs text-slate-400 block mb-1">キル / アシスト / デス</label>
+            <label className="text-xs text-slate-400 block mb-1">キル / デス / スペシャル</label>
             <div className="flex gap-2">
               {(
                 [
                   ['キル', kill, setKill],
-                  ['アシスト', assist, setAssist],
                   ['デス', death, setDeath],
+                  ['スペシャル', special, setSpecial],
                 ] as const
               ).map(([label, value, setter]) => (
                 <div key={label} className="flex-1">
