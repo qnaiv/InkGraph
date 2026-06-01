@@ -706,8 +706,10 @@ impl YoloDetector {
         }
 
         let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(2)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .with_intra_threads(2)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
             .commit_from_file(&self.model_path)?;
 
         log::info!("[yolo] model loaded: {}", self.model_path.display());
