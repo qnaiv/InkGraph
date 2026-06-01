@@ -578,41 +578,37 @@ use std::path::PathBuf;
 
 /// YOLO モデルが検出するクラス (yolo_result.onnx の学習クラス順と一致させること)
 ///
-/// 【設計方針】
-/// - BattleStart: 「試合を開始します」テキスト → バトル開始トリガー
-/// - Win / Lose / Draw: WIN!/LOSE!/DRAW! バナー → 勝敗判定 (y 座標不要)
-/// - MyArrow: 自分の黄色 ▶ マーカー → KDA 行の y 基準座標を取得
-/// - GoldAward: 金表彰アイコン (検出数 = 取得した金表彰の枚数)
-/// - KillLog: 試合中のキルログ通知 (将来的なリアルタイムキル追跡用)
-/// - RuleText / StageText / ModeText: テキスト BBox → OCR 用
+/// クラス ID は Roboflow の data.yaml names: リストのアルファベット順に対応する。
+/// 現在のモデル (nc=7): BattleStart/Draw/GoldAward/KillLog/Lose/ModeText/MyArrow
+/// 未学習 (nc>=8 で有効): RuleText / StageText / Win
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(usize)]
 pub enum YoloClass {
     BattleStart = 0,
-    GoldAward   = 1,
-    KillLog     = 2,
-    Win         = 3,
+    Draw        = 1,
+    GoldAward   = 2,
+    KillLog     = 3,
     Lose        = 4,
-    Draw        = 5,
-    ModeText    = 6,
-    MyArrow     = 7,
-    RuleText    = 8,
-    StageText   = 9,
+    ModeText    = 5,
+    MyArrow     = 6,
+    RuleText    = 7,
+    StageText   = 8,
+    Win         = 9,
 }
 
 impl YoloClass {
     pub fn from_id(id: usize) -> Option<Self> {
         match id {
             0 => Some(Self::BattleStart),
-            1 => Some(Self::GoldAward),
-            2 => Some(Self::KillLog),
-            3 => Some(Self::Win),
+            1 => Some(Self::Draw),
+            2 => Some(Self::GoldAward),
+            3 => Some(Self::KillLog),
             4 => Some(Self::Lose),
-            5 => Some(Self::Draw),
-            6 => Some(Self::ModeText),
-            7 => Some(Self::MyArrow),
-            8 => Some(Self::RuleText),
-            9 => Some(Self::StageText),
+            5 => Some(Self::ModeText),
+            6 => Some(Self::MyArrow),
+            7 => Some(Self::RuleText),
+            8 => Some(Self::StageText),
+            9 => Some(Self::Win),
             _ => None,
         }
     }
