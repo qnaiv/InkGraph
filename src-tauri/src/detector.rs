@@ -748,12 +748,20 @@ impl YoloDetector {
         let outputs = session.run(ort::inputs!["images" => input_tensor])?;
 
         // 3. 出力パース
-        // YOLOv8 output shape: [1, 4+num_classes, 8400]
-        // Flat layout (row-major): element [0, row, col] = data[row * num_anchors + col]
+        // YOLOv8 output shape: [1, 4+nc, num_anchors]
+        // nc はモデルの学習クラス数 (コード定数と一致しなくてもよい)
         let (output_shape, output_data) = outputs["output0"].try_extract_tensor::<f32>()?;
 
-        let num_classes  = YoloClass::num_classes();
-        let num_anchors  = output_shape[2] as usize; // 8400
+        if output_shape.len() < 3 || output_shape[1] < 5 {
+            anyhow::bail!("[yolo] unexpected output shape: {:?}", output_shape);
+        }
+        let nc          = (output_shape[1] as usize) - 4; // モデルの実クラス数
+        let num_anchors = output_shape[2] as usize;       // 8400
+
+        log::debug!(
+            "[yolo] output shape={:?}, nc(model)={nc}, nc(code)={}, anchors={num_anchors}",
+            output_shape, YoloClass::num_classes()
+        );
 
         let mut raw_detections: Vec<Detection> = Vec::new();
 
@@ -765,9 +773,10 @@ impl YoloDetector {
             let bh = output_data[3 * num_anchors + anchor_idx];
 
             // クラス確信度の最大値とそのクラス id を探す
+            // モデルの実クラス数 nc を使うことで out-of-bounds を防ぐ
             let mut max_conf   = 0f32;
             let mut max_class  = 0usize;
-            for c in 0..num_classes {
+            for c in 0..nc {
                 let score = output_data[(4 + c) * num_anchors + anchor_idx];
                 if score > max_conf {
                     max_conf  = score;
