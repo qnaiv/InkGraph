@@ -75,7 +75,7 @@ impl LetterboxParams {
 ///
 /// # 戻り値
 /// `(flat_chw_vec, LetterboxParams)`
-/// flat_chw_vec を ndarray の `Array4::<f32>` に詰め直して YOLO へ渡す。
+/// flat_chw_vec は CHW 順のフラット f32 配列。(shape, data) タプルとして YOLO へ渡す。
 pub fn letterbox_bgra(
     bgra:        &[u8],
     frame_w:     u32,
