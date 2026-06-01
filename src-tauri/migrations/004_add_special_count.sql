@@ -1,3 +1,2 @@
--- マイグレーション 003: special_count カラムを追加
--- assist_count は互換性のため残すが今後は使用しない
-ALTER TABLE matches ADD COLUMN special_count INTEGER;
+-- special_count を追加 (未適用の場合のみ)
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS special_count INTEGER;
