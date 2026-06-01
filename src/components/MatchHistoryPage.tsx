@@ -1,7 +1,7 @@
 // InkGraph — 全試合一覧ページ
 
 import { useState, useEffect, useCallback } from 'react';
-import { selectAllMatches } from '../lib/db';
+import { selectAllMatches, dbDeleteMatch } from '../lib/db';
 import { RULES } from '../types';
 import type { Match, RawMatch } from '../types';
 
@@ -39,6 +39,11 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load, refreshKey]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    await dbDeleteMatch(id);
+    setAllMatches((prev) => prev.filter((m) => m.id !== id));
+  }, []);
 
   const filtered = allMatches.filter((m) => {
     if (resultFilter !== 'all' && m.result !== resultFilter) return false;
@@ -139,7 +144,7 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
       ) : (
         <div className="flex-1 overflow-y-auto">
           {filtered.map((match) => (
-            <MatchHistoryRow key={match.id} match={match} onEdit={onEdit} />
+            <MatchHistoryRow key={match.id} match={match} onEdit={onEdit} onDelete={handleDelete} />
           ))}
         </div>
       )}
@@ -147,7 +152,8 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
   );
 }
 
-function MatchHistoryRow({ match, onEdit }: { match: Match; onEdit: (m: Match) => void }) {
+function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m: Match) => void; onDelete: (id: string) => void }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const dateStr = new Date(match.played_at).toLocaleString('ja-JP', {
     month: 'numeric',
     day: 'numeric',
@@ -163,7 +169,7 @@ function MatchHistoryRow({ match, onEdit }: { match: Match; onEdit: (m: Match) =
 
   return (
     <div
-      className={`grid grid-cols-[80px_90px_90px_1fr_1fr_90px_100px_40px] gap-x-2 px-3 py-2 text-xs border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors items-center ${
+      className={`grid grid-cols-[80px_90px_90px_1fr_1fr_90px_100px_32px_32px] gap-x-2 px-3 py-2 text-xs border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors items-center ${
         match.result === 'in_progress' ? 'opacity-60' : ''
       }`}
     >
@@ -206,15 +212,41 @@ function MatchHistoryRow({ match, onEdit }: { match: Match; onEdit: (m: Match) =
         {match.xp_after != null ? match.xp_after.toFixed(1) : '—'}
       </span>
 
-      {/* 編集ボタン */}
-      <button
-        onClick={() => onEdit(match)}
-        className="text-slate-600 hover:text-indigo-400 transition-colors text-center"
-        title="編集"
-        disabled={match.result === 'in_progress'}
-      >
-        ✏️
-      </button>
+      {/* 編集 / 削除ボタン (削除確認中は確認UIに置き換え) */}
+      {confirmDelete ? (
+        <div className="col-span-2 flex gap-1 items-center justify-end">
+          <button
+            className="px-1.5 py-0.5 text-[10px] text-white bg-red-600 hover:bg-red-500 rounded"
+            onClick={() => { setConfirmDelete(false); onDelete(match.id); }}
+          >
+            削除
+          </button>
+          <button
+            className="px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-white rounded"
+            onClick={() => setConfirmDelete(false)}
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        <>
+          <button
+            onClick={() => onEdit(match)}
+            className="text-slate-600 hover:text-indigo-400 transition-colors text-center"
+            title="編集"
+            disabled={match.result === 'in_progress'}
+          >
+            ✏️
+          </button>
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-slate-700 hover:text-red-400 transition-colors text-center"
+            title="削除"
+          >
+            🗑
+          </button>
+        </>
+      )}
     </div>
   );
 }

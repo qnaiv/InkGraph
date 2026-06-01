@@ -11,12 +11,14 @@ interface MatchCardProps {
   onUpdateTags: (id: string, tags: string[]) => void;
   onUpdateNote: (id: string, note: string) => void;
   onEdit?: (match: Match) => void;
+  onDelete?: (id: string) => void;
 }
 
-export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote, onEdit }: MatchCardProps) {
+export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote, onEdit, onDelete }: MatchCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState(match.note ?? '');
   const [noteEditing, setNoteEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const dateStr = new Date(match.played_at).toLocaleString('ja-JP', {
     month: 'numeric',
@@ -95,14 +97,42 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote, o
       {/* 展開セクション: ブキ / タグ / メモ */}
       {expanded && (
         <div className="px-2 pb-3 pt-1 space-y-2 border-t border-slate-700/40">
-          {onEdit && (
-            <button
-              className="w-full py-1 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors border border-indigo-500/30"
-              onClick={() => onEdit(match)}
-            >
-              ✏️ 全項目を編集
-            </button>
-          )}
+          <div className="flex gap-1.5">
+            {onEdit && (
+              <button
+                className="flex-1 py-1 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors border border-indigo-500/30"
+                onClick={() => onEdit(match)}
+              >
+                ✏️ 全項目を編集
+              </button>
+            )}
+            {onDelete && !confirmDelete && (
+              <button
+                className="py-1 px-2 text-xs text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors border border-slate-600/50 hover:border-red-500/40"
+                onClick={() => setConfirmDelete(true)}
+                title="削除"
+              >
+                🗑
+              </button>
+            )}
+            {onDelete && confirmDelete && (
+              <div className="flex gap-1 items-center">
+                <span className="text-xs text-red-400">削除しますか?</span>
+                <button
+                  className="py-0.5 px-2 text-xs text-white bg-red-600 hover:bg-red-500 rounded transition-colors"
+                  onClick={() => { setConfirmDelete(false); onDelete(match.id); }}
+                >
+                  削除
+                </button>
+                <button
+                  className="py-0.5 px-2 text-xs text-slate-400 hover:text-white rounded transition-colors"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  キャンセル
+                </button>
+              </div>
+            )}
+          </div>
           <WeaponPicker
             currentWeapon={match.weapon}
             onSelect={(weapon) => onUpdateWeapon(match.id, weapon)}

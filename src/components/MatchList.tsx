@@ -10,6 +10,7 @@ interface MatchListProps {
   onUpdateTags: (id: string, tags: string[]) => void;
   onUpdateNote: (id: string, note: string) => void;
   onEdit?: (match: Match) => void;
+  onDelete?: (id: string) => void;
 }
 
 export function MatchList({
@@ -19,6 +20,7 @@ export function MatchList({
   onUpdateTags,
   onUpdateNote,
   onEdit,
+  onDelete,
 }: MatchListProps) {
   if (isLoading) {
     return (
@@ -47,6 +49,7 @@ export function MatchList({
           onUpdateTags={onUpdateTags}
           onUpdateNote={onUpdateNote}
           onEdit={onEdit}
+          onDelete={onDelete}
         />
       ))}
     </div>

@@ -11,6 +11,7 @@ import {
   dbUpdateTags,
   dbUpdateNote,
   dbUpdateFullMatch,
+  dbDeleteMatch,
 } from '../lib/db';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ interface UseMatchesReturn {
   error: string | null;
   addMatch:     (raw: RawMatch) => Promise<void>;
   updateMatch:  (raw: RawMatch) => Promise<void>;
+  deleteMatch:  (id: string) => Promise<void>;
   updateWeapon: (id: string, weapon: string) => Promise<void>;
   updateTags:   (id: string, tags: string[]) => Promise<void>;
   updateNote:   (id: string, note: string)   => Promise<void>;
@@ -124,6 +126,12 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m)));
   }, []);
 
+  // ── 削除操作 ─────────────────────────────────────────────────
+  const deleteMatch = useCallback(async (id: string) => {
+    await dbDeleteMatch(id);
+    setMatches((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
   // ── 更新操作 ─────────────────────────────────────────────────
   const updateWeapon = useCallback(async (id: string, weapon: string) => {
     await dbUpdateWeapon(id, weapon);
@@ -140,5 +148,5 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, note } : m)));
   }, []);
 
-  return { matches, isLoading, error, addMatch, updateMatch, updateWeapon, updateTags, updateNote };
+  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, updateWeapon, updateTags, updateNote };
 }

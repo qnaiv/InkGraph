@@ -22,7 +22,7 @@ export default function App() {
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
-  const { matches, isLoading, error, addMatch, updateMatch, updateWeapon, updateTags, updateNote } =
+  const { matches, isLoading, error, addMatch, updateMatch, deleteMatch, updateWeapon, updateTags, updateNote } =
     useMatches(selectedRule);
 
   const handleEditSubmit = async (raw: RawMatch) => {
@@ -116,6 +116,7 @@ export default function App() {
               onUpdateTags={updateTags}
               onUpdateNote={updateNote}
               onEdit={handleOpenEdit}
+              onDelete={deleteMatch}
             />
           </div>
         </aside>

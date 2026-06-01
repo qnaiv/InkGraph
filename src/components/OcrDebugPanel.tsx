@@ -223,6 +223,52 @@ export function OcrDebugPanel() {
               </div>
             )}
             <p className="text-slate-500 text-xs">✓=0.70↑(有効) △=0.40-0.70(閾値未満) ✗=0.10-0.40(弱い)</p>
+
+            {/* 勝敗判定デバッグ */}
+            {yoloResult.detections.length > 0 && (() => {
+              const PANEL_BOUNDARY_Y = 0.630;
+              const get = (name: string) =>
+                yoloResult.detections
+                  .filter((d) => d.class_name === name)
+                  .sort((a, b) => b.confidence - a.confidence)[0];
+              const winDet   = get('Win');
+              const loseDet  = get('Lose');
+              const drawDet  = get('Draw');
+              const arrowDet = get('MyArrow');
+              const isResultScreen = (winDet?.confidence ?? 0) >= 0.30 || (loseDet?.confidence ?? 0) >= 0.30;
+              const arrowY = arrowDet ? (arrowDet.y1 + arrowDet.y2) / 2 : null;
+              const arrowDecision = arrowY === null ? null : arrowY < PANEL_BOUNDARY_Y ? 'WIN' : 'LOSE';
+              const drawDetected = (drawDet?.confidence ?? 0) >= 0.55;
+              const verdict = drawDetected ? 'DRAW' : isResultScreen ? (arrowDecision ?? 'MyArrow未検知') : 'リザルト画面未検知';
+              const verdictColor = verdict === 'WIN' ? 'text-green-400' : verdict === 'LOSE' ? 'text-red-400' : verdict === 'DRAW' ? 'text-yellow-400' : 'text-slate-500';
+
+              return (
+                <div className="mt-1 border-t border-slate-700 pt-1 space-y-0.5">
+                  <p className="text-slate-400 mb-0.5">勝敗判定ログ</p>
+                  {[
+                    { label: 'Win クラス',  det: winDet,  threshold: 0.30, note: '≥0.30でリザルト画面検知' },
+                    { label: 'Lose クラス', det: loseDet, threshold: 0.30, note: '≥0.30でリザルト画面検知' },
+                    { label: 'Draw クラス', det: drawDet, threshold: 0.55, note: '≥0.55で引き分け確定' },
+                    { label: 'MyArrow',     det: arrowDet, threshold: 0.60, note: arrowY !== null ? `Y=${arrowY.toFixed(3)} → ${arrowDecision}` : '未検知' },
+                  ].map(({ label, det, threshold, note }) => (
+                    <div key={label} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
+                      <span className={`font-bold w-4 text-right text-xs ${det && det.confidence >= threshold ? 'text-green-400' : 'text-slate-600'}`}>
+                        {det && det.confidence >= threshold ? '✓' : '✗'}
+                      </span>
+                      <span className="text-slate-300 font-mono w-20 text-xs">{label}</span>
+                      <span className="text-slate-400 font-mono w-8 text-right text-xs">
+                        {det ? `${(det.confidence * 100).toFixed(0)}%` : '—'}
+                      </span>
+                      <span className="text-slate-500 text-xs truncate flex-1">{note}</span>
+                    </div>
+                  ))}
+                  <div className={`flex items-center gap-1.5 bg-slate-900/80 rounded px-1.5 py-1 mt-0.5`}>
+                    <span className="text-slate-400 text-xs">→ 判定:</span>
+                    <span className={`font-bold text-xs ${verdictColor}`}>{verdict}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
