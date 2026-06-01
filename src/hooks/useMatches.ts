@@ -66,39 +66,50 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
 
   // ── Rust からのリアルタイム通知を購読 ───────────────────────
   useEffect(() => {
-    const unlisteners: UnlistenFn[] = [];
+    let cancelled = false;
+    const cleanupFns: UnlistenFn[] = [];
 
-    // Phase 1: バトル開始 → "in_progress" レコードを追加
-    listen<MatchDetectedPayload>('battle_started', async (event) => {
-      const raw = event.payload.match_data;
-      try {
-        await insertMatch(raw);
-      } catch (e) {
-        console.error('[useMatches] insertMatch(in_progress) failed:', e);
-      }
-      setMatches((prev) => [parseMatch(raw), ...prev]);
-    }).then((fn) => unlisteners.push(fn));
-
-    // Phase 2: リザルト確定 → 既存の "in_progress" レコードを win/lose に更新
-    listen<MatchDetectedPayload>('match_detected', async (event) => {
-      const raw = event.payload.match_data;
-      try {
-        await updateMatchResult(raw);
-      } catch (e) {
-        console.error('[useMatches] updateMatchResult failed:', e);
-      }
-      setMatches((prev) => {
-        const exists = prev.some((m) => m.id === raw.id);
-        if (exists) {
-          // in_progress → win/lose にインプレース更新
-          return prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m));
+    async function setup() {
+      // Phase 1: バトル開始 → "in_progress" レコードを追加
+      const fn1 = await listen<MatchDetectedPayload>('battle_started', async (event) => {
+        const raw = event.payload.match_data;
+        try {
+          await insertMatch(raw);
+        } catch (e) {
+          console.error('[useMatches] insertMatch(in_progress) failed:', e);
         }
-        // キャプチャ途中開始などで in_progress がない場合は先頭に追加
-        return [parseMatch(raw), ...prev];
+        setMatches((prev) => [parseMatch(raw), ...prev]);
       });
-    }).then((fn) => unlisteners.push(fn));
+      // StrictMode で cleanup が先に走った場合は即解除
+      if (cancelled) { fn1(); return; }
+      cleanupFns.push(fn1);
 
-    return () => { unlisteners.forEach((fn) => fn()); };
+      // Phase 2: リザルト確定 → 既存の "in_progress" レコードを win/lose に更新
+      const fn2 = await listen<MatchDetectedPayload>('match_detected', async (event) => {
+        const raw = event.payload.match_data;
+        try {
+          await updateMatchResult(raw);
+        } catch (e) {
+          console.error('[useMatches] updateMatchResult failed:', e);
+        }
+        setMatches((prev) => {
+          const exists = prev.some((m) => m.id === raw.id);
+          if (exists) {
+            return prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m));
+          }
+          return [parseMatch(raw), ...prev];
+        });
+      });
+      if (cancelled) { fn2(); return; }
+      cleanupFns.push(fn2);
+    }
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      cleanupFns.forEach((fn) => fn());
+    };
   }, []);
 
   // ── 手動追加 ─────────────────────────────────────────────────
