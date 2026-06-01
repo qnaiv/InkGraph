@@ -118,6 +118,7 @@ pub async fn stop_capture(app: AppHandle, state: State<'_, AppState>) -> Result<
         active: false,
         fps: 0.0,
         window_title: None,
+        yolo_loaded: false,
     });
 
     log::info!("[commands] stop_capture");

@@ -71,6 +71,7 @@ pub struct CaptureStatusPayload {
     pub active: bool,
     pub fps: f32,
     pub window_title: Option<String>,
+    pub yolo_loaded: bool,
 }
 
 /// Rust → React: OCR デバッグ情報

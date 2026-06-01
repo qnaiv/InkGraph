@@ -33,7 +33,7 @@ pub async fn run(app: AppHandle, state: AppState, hwnd: u64) {
 
     *state.is_capturing.lock().await = false;
     let _ = app.emit("capture_status", CaptureStatusPayload {
-        active: false, fps: 0.0, window_title: None,
+        active: false, fps: 0.0, window_title: None, yolo_loaded: false,
     });
     log::info!("[capture_loop] stopped");
 }
@@ -71,14 +71,14 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
         Err(e) => {
             log::error!("[capture_loop] WGC session failed: {e}");
             let _ = app.emit("capture_status", CaptureStatusPayload {
-                active: false, fps: 0.0, window_title: None,
+                active: false, fps: 0.0, window_title: None, yolo_loaded: false,
             });
             return;
         }
     };
 
     let _ = app.emit("capture_status", CaptureStatusPayload {
-        active: true, fps: 5.0, window_title: None,
+        active: true, fps: 5.0, window_title: None, yolo_loaded: yolo.is_loaded(),
     });
 
     let mut detector           = ResultDetector::new();
@@ -243,7 +243,7 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
 
     log::warn!("[capture_loop] running stub loop (non-Windows)");
     let _ = app.emit("capture_status", CaptureStatusPayload {
-        active: true, fps: 0.0, window_title: None,
+        active: true, fps: 0.0, window_title: None, yolo_loaded: false,
     });
 
     tokio::time::sleep(Duration::from_secs(2)).await;

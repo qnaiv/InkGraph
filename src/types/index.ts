@@ -43,6 +43,7 @@ export interface CaptureStatusPayload {
   active: boolean;
   fps: number;
   window_title: string | null;
+  yolo_loaded: boolean;
 }
 
 export interface CaptureDebugResult {

@@ -1,12 +1,21 @@
 // InkGraph — OCR デバッグパネル
 // Issue #2 の Windows 実機確認用。開発ビルド時のみ表示する。
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { OcrTestResult, CaptureDebugResult, WindowInfo } from '../types';
+import { listen } from '@tauri-apps/api/event';
+import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload } from '../types';
 
 export function OcrDebugPanel() {
   const [minimized, setMinimized] = useState(true);
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatusPayload | null>(null);
+
+  useEffect(() => {
+    const unlisten = listen<CaptureStatusPayload>('capture_status', (e) => {
+      setCaptureStatus(e.payload);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
 
   // ── ファイル OCR ──────────────────────────────────────────────────────────
   const [imagePath, setImagePath] = useState('');
@@ -61,10 +70,19 @@ export function OcrDebugPanel() {
   if (minimized) {
     return (
       <button
-        className="fixed bottom-4 left-4 bg-slate-900 border border-amber-500/50 rounded-lg px-3 py-1.5 text-amber-400 text-xs font-bold shadow-xl z-50 hover:bg-slate-800 transition-colors"
+        className="fixed bottom-4 left-4 bg-slate-900 border border-amber-500/50 rounded-lg px-3 py-1.5 text-amber-400 text-xs font-bold shadow-xl z-50 hover:bg-slate-800 transition-colors flex items-center gap-2"
         onClick={() => setMinimized(false)}
       >
         🔬 DEBUG
+        {captureStatus?.active && (
+          <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${
+            captureStatus.yolo_loaded
+              ? 'bg-violet-600/40 text-violet-300 border border-violet-500/50'
+              : 'bg-slate-700 text-slate-400 border border-slate-600'
+          }`}>
+            {captureStatus.yolo_loaded ? 'YOLO' : 'Pixel'}
+          </span>
+        )}
       </button>
     );
   }
@@ -79,6 +97,35 @@ export function OcrDebugPanel() {
         >
           最小化
         </button>
+      </div>
+
+      {/* ── 検知エンジン状態 ─────────────────────────────────────────────── */}
+      <div className={`rounded-lg p-3 flex items-center justify-between text-xs border ${
+        !captureStatus?.active
+          ? 'bg-slate-800 border-slate-700'
+          : captureStatus.yolo_loaded
+            ? 'bg-violet-900/30 border-violet-500/50'
+            : 'bg-slate-800 border-slate-600'
+      }`}>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${captureStatus?.active ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
+          <span className="text-slate-300 font-semibold">検知エンジン</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {captureStatus?.active ? (
+            captureStatus.yolo_loaded ? (
+              <span className="px-2 py-0.5 rounded font-bold text-violet-200 bg-violet-600/40 border border-violet-400/60 tracking-wide">
+                🤖 YOLO (ONNX)
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded font-bold text-slate-300 bg-slate-700 border border-slate-500 tracking-wide">
+                📐 Pixel Fallback
+              </span>
+            )
+          ) : (
+            <span className="text-slate-500">キャプチャ停止中</span>
+          )}
+        </div>
       </div>
 
       {/* ── ① ライブキャプチャ診断 ─────────────────────────────────────── */}

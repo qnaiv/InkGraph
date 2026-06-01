@@ -14,6 +14,7 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
   const [windows, setWindows]           = useState<WindowInfo[]>([]);
   const [selectedHwnd, setSelectedHwnd] = useState<number | null>(null);
   const [fps, setFps]                   = useState(0);
+  const [yoloLoaded, setYoloLoaded]     = useState<boolean | null>(null);
   const [loadError, setLoadError]       = useState<string | null>(null);
 
   // キャプチャ状態イベントを購読
@@ -21,6 +22,11 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
     const unlisten = listen<CaptureStatusPayload>('capture_status', (e) => {
       onCapturingChange(e.payload.active);
       setFps(e.payload.fps);
+      if (e.payload.active) {
+        setYoloLoaded(e.payload.yolo_loaded);
+      } else {
+        setYoloLoaded(null);
+      }
     });
     return () => { unlisten.then((fn) => fn()); };
   }, [onCapturingChange]);
@@ -69,10 +75,19 @@ export function Header({ isCapturing, onCapturingChange }: HeaderProps) {
       {/* キャプチャ制御 */}
       <div className="flex items-center gap-3">
         {isCapturing && (
-          <div className="flex items-center gap-1.5 text-xs text-green-400">
+          <div className="flex items-center gap-2 text-xs text-green-400">
             <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
             キャプチャ中
             {fps > 0 && <span className="text-slate-400">({fps.toFixed(0)} fps)</span>}
+            {yoloLoaded !== null && (
+              <span className={`px-1.5 py-0.5 rounded font-bold tracking-wide ${
+                yoloLoaded
+                  ? 'bg-violet-600/30 text-violet-300 border border-violet-500/50'
+                  : 'bg-slate-700/60 text-slate-400 border border-slate-600/50'
+              }`}>
+                {yoloLoaded ? 'YOLO' : 'Pixel'}
+              </span>
+            )}
           </div>
         )}
 
