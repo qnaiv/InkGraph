@@ -46,8 +46,8 @@ pub fn run() {
                     },
                     tauri_plugin_sql::Migration {
                         version: 3,
-                        description: "add special_count column (placeholder)",
-                        sql: "SELECT 1;",
+                        description: "add special_count column",
+                        sql: include_str!("../migrations/003_add_special_count.sql"),
                         kind: tauri_plugin_sql::MigrationKind::Up,
                     },
                     tauri_plugin_sql::Migration {
