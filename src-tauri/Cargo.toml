@@ -38,9 +38,11 @@ once_cell = "1"
 thiserror = "1"
 anyhow    = "1"
 
-# YOLO/ONNX 推論 (ort 2.x + load-dynamic: onnxruntime.dll を実行時ロード)
-# download-binaries に切り替えるとビルド時に自動ダウンロード
-ort     = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
+# YOLO/ONNX 推論
+# download-binaries: ビルド時に onnxruntime.dll を自動ダウンロード
+# copy-dylibs:       ダウンロードした DLL を target/debug/ に自動コピー
+# load-dynamic:      実行時に DLL をロード (静的リンクなし)
+ort     = { version = "=2.0.0-rc.12", features = ["load-dynamic", "download-binaries", "copy-dylibs"] }
 
 # 画像処理 (前処理・リサイズ・二値化)
 image     = "0.25"
