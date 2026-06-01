@@ -77,11 +77,27 @@ export interface YoloDebugDetection {
   y2: number;
 }
 
+export interface OcrDebugField {
+  raw: string;
+  normalized: string | null;
+}
+
+export interface OcrDebugResult {
+  rule:    OcrDebugField;
+  stage:   OcrDebugField;
+  mode:    OcrDebugField;
+  kill:    OcrDebugField;
+  death:   OcrDebugField;
+  special: OcrDebugField;
+  arrow_y: number | null;
+}
+
 export interface YoloDebugResult {
   frame_w: number;
   frame_h: number;
   model_loaded: boolean;
   detections: YoloDebugDetection[];
+  ocr: OcrDebugResult | null;
   error: string | null;
 }
 

@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult } from '../types';
+import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult, OcrDebugResult } from '../types';
 
 export function OcrDebugPanel() {
   const [minimized, setMinimized] = useState(true);
@@ -207,13 +207,13 @@ export function OcrDebugPanel() {
                   .sort((a, b) => b.confidence - a.confidence)
                   .map((d, i) => (
                     <div key={i} className="flex items-center gap-2 bg-slate-900 rounded px-1.5 py-0.5">
-                      <span className={`font-bold w-4 text-right ${d.confidence >= 0.70 ? 'text-green-400' : d.confidence >= 0.40 ? 'text-yellow-400' : 'text-slate-500'}`}>
-                        {d.confidence >= 0.70 ? '✓' : d.confidence >= 0.40 ? '△' : '✗'}
+                      <span className={`font-bold w-4 text-right ${d.confidence >= 0.60 ? 'text-green-400' : d.confidence >= 0.40 ? 'text-yellow-400' : 'text-slate-500'}`}>
+                        {d.confidence >= 0.60 ? '✓' : d.confidence >= 0.40 ? '△' : '✗'}
                       </span>
                       <span className="text-white font-mono w-24 truncate">{d.class_name}</span>
                       <div className="flex-1 bg-slate-700 rounded-full h-1.5">
                         <div
-                          className={`h-1.5 rounded-full ${d.confidence >= 0.70 ? 'bg-green-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+                          className={`h-1.5 rounded-full ${d.confidence >= 0.60 ? 'bg-green-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
                           style={{ width: `${Math.round(d.confidence * 100)}%` }}
                         />
                       </div>
@@ -222,7 +222,7 @@ export function OcrDebugPanel() {
                   ))}
               </div>
             )}
-            <p className="text-slate-500 text-xs">✓=0.70↑(有効) △=0.40-0.70(閾値未満) ✗=0.10-0.40(弱い)</p>
+            <p className="text-slate-500 text-xs">✓=0.60↑(有効) △=0.40-0.60(閾値未満) ✗=0.10-0.40(弱い)</p>
 
             {/* 勝敗判定デバッグ */}
             {yoloResult.detections.length > 0 && (() => {
@@ -249,7 +249,7 @@ export function OcrDebugPanel() {
                     { label: 'Win クラス',  det: winDet,  threshold: 0.30, note: '≥0.30でリザルト画面検知' },
                     { label: 'Lose クラス', det: loseDet, threshold: 0.30, note: '≥0.30でリザルト画面検知' },
                     { label: 'Draw クラス', det: drawDet, threshold: 0.55, note: '≥0.55で引き分け確定' },
-                    { label: 'MyArrow',     det: arrowDet, threshold: 0.60, note: arrowY !== null ? `Y=${arrowY.toFixed(3)} → ${arrowDecision}` : '未検知' },
+                    { label: 'MyArrow',     det: arrowDet, threshold: 0.60, note: arrowY !== null ? `Y=${arrowY.toFixed(3)} → ${arrowDecision}` : '未検知 → ピクセル判定' },
                   ].map(({ label, det, threshold, note }) => (
                     <div key={label} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
                       <span className={`font-bold w-4 text-right text-xs ${det && det.confidence >= threshold ? 'text-green-400' : 'text-slate-600'}`}>
@@ -270,6 +270,11 @@ export function OcrDebugPanel() {
               );
             })()}
           </div>
+        )}
+
+        {/* YOLO OCR 結果 */}
+        {yoloResult?.ocr && (
+          <OcrDebugSection ocr={yoloResult.ocr} />
         )}
 
         {diagError && (
@@ -447,6 +452,51 @@ export function OcrDebugPanel() {
           ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
         </p>
       </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OCR デバッグセクション
+// ---------------------------------------------------------------------------
+
+function OcrDebugSection({ ocr }: { ocr: OcrDebugResult }) {
+  const fields: { label: string; field: import('../types').OcrDebugField }[] = [
+    { label: 'ルール',     field: ocr.rule    },
+    { label: 'ステージ',   field: ocr.stage   },
+    { label: 'モード',     field: ocr.mode    },
+    { label: 'キル',       field: ocr.kill    },
+    { label: 'デス',       field: ocr.death   },
+    { label: 'スペシャル', field: ocr.special },
+  ];
+
+  return (
+    <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-1">
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-slate-400">YOLO OCR 結果</span>
+        {ocr.arrow_y !== null && (
+          <span className="text-slate-500 font-mono">MyArrow Y={ocr.arrow_y.toFixed(3)}</span>
+        )}
+      </div>
+      {fields.map(({ label, field }) => (
+        <div key={label} className="bg-slate-900 rounded px-1.5 py-0.5">
+          <div className="flex items-start gap-2">
+            <span className="text-slate-500 w-16 shrink-0">{label}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-slate-300 font-mono truncate">
+                {field.raw || <span className="text-slate-600">(空)</span>}
+              </p>
+              {field.normalized ? (
+                <p className="text-green-400 font-mono">→ {field.normalized}</p>
+              ) : field.raw ? (
+                <p className="text-red-400">→ 未マッチ</p>
+              ) : (
+                <p className="text-slate-600">→ 検出なし</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

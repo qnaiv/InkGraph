@@ -122,6 +122,7 @@ pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
                 frame_w: 0, frame_h: 0,
                 model_loaded: false,
                 detections: vec![],
+                ocr: None,
                 error: Some(format!("モデルロード失敗: {e}")),
             });
         }
@@ -135,6 +136,9 @@ pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
         let dets = tokio::task::block_in_place(|| yolo.detect_debug(&frame))
             .map_err(|e| format!("YOLO detect failed: {e}"))?;
 
+        // 全フィールドの OCR デバッグ情報を収集
+        let ocr = tokio::task::block_in_place(|| crate::extractor::extract_debug_ocr(&frame, &dets));
+
         let detections = dets.into_iter().map(|d| YoloDebugDetection {
             class_name: d.class_name,
             class_id:   d.class_id,
@@ -147,6 +151,7 @@ pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
             frame_w: fw, frame_h: fh,
             model_loaded: true,
             detections,
+            ocr: Some(ocr),
             error: None,
         })
     }

@@ -133,12 +133,33 @@ pub struct YoloDebugDetection {
     pub y2: f32,
 }
 
+/// OCR デバッグ: 1フィールド分の生テキスト + 正規化後
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrDebugField {
+    pub raw: String,
+    pub normalized: Option<String>,
+}
+
+/// OCR デバッグ: YOLO 検出領域から読んだ全フィールド
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrDebugResult {
+    pub rule:    OcrDebugField,
+    pub stage:   OcrDebugField,
+    pub mode:    OcrDebugField,
+    pub kill:    OcrDebugField,
+    pub death:   OcrDebugField,
+    pub special: OcrDebugField,
+    pub arrow_y: Option<f32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YoloDebugResult {
     pub frame_w: u32,
     pub frame_h: u32,
     pub model_loaded: bool,
-    /// 信頼度 0.10 以上の全検出 (通常の閾値 0.70 より低い)
+    /// 信頼度 0.10 以上の全検出 (通常の閾値 0.60 より低い)
     pub detections: Vec<YoloDebugDetection>,
+    /// YOLO 検出領域の OCR 結果
+    pub ocr: Option<OcrDebugResult>,
     pub error: Option<String>,
 }

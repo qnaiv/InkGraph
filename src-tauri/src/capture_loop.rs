@@ -1,18 +1,8 @@
-/// InkGraph — キャプチャループ
+/// InkGraph — キャプチャループ (YOLO 専用)
 ///
-/// 検知フロー:
-///
-///   ┌─ YOLO パス (yolo_result.onnx が配置済みの場合) ──────────────────────┐
-///   │  バトル開始: YOLO BattleStart クラスで検知                            │
-///   │  リザルト検知: YOLO Win/Lose/Draw → BBox クロップ → WinRT OCR        │
-///   │  取得項目: 勝ち/負け/引き分け, ルール, ステージ, モード, キル/デス/SP │
-///   │            金表彰枚数 (GoldAward 検出数)                              │
-///   └──────────────────────────────────────────────────────────────────────┘
-///   ┌─ ピクセルフォールバック (モデル未配置の場合) ─────────────────────────┐
-///   │  バトル開始: ピクセル検知                                              │
-///   │  リザルト検知: グレー行 + 黄色矢印ピクセル判定 → 固定 ROI OCR        │
-///   │  取得項目: 勝ち/負け, ルール, ステージ, キル/デス/SP (モードなし)     │
-///   └──────────────────────────────────────────────────────────────────────┘
+/// yolo_result.onnx が未配置の場合はエラーで終了する。
+/// バトル開始: YOLO BattleStart クラスで検知
+/// リザルト検知: Win/Lose バナー検知 → MyArrow Y 座標で勝敗判定 → BBox OCR
 
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -47,23 +37,26 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
         db::{new_in_progress_match, new_match_from_ocr},
-        detector::{pixel_result_check, DetectionResult, ResultDetector, YoloClass, YoloDetector, PANEL_BOUNDARY_Y},
-        extractor::{extract_from_yolo_detections, extract_match_data},
+        detector::{pixel_result_check, YoloClass, YoloDetector, PANEL_BOUNDARY_Y},
+        extractor::extract_from_yolo_detections,
         types::MatchDetectedPayload,
     };
 
-    // ── YOLO モデルをロード (失敗してもフォールバックで継続) ──────────────
-    // 探索順: 実行ファイルと同ディレクトリ → カレントディレクトリ
+    // ── YOLO モデルをロード (失敗したらエラーで中断) ─────────────────────
     let model_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_result.onnx")))
         .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_result.onnx"));
 
     let mut yolo = YoloDetector::new(&model_path);
-    match tokio::task::block_in_place(|| yolo.load()) {
-        Ok(()) => log::info!("[capture_loop] YOLO loaded: {}", model_path.display()),
-        Err(e) => log::warn!("[capture_loop] YOLO not loaded → pixel fallback: {e}"),
+    if let Err(e) = tokio::task::block_in_place(|| yolo.load()) {
+        log::error!("[capture_loop] YOLO load failed — キャプチャを中断します: {e}");
+        let _ = app.emit("capture_status", CaptureStatusPayload {
+            active: false, fps: 0.0, window_title: None, yolo_loaded: false,
+        });
+        return;
     }
+    log::info!("[capture_loop] YOLO loaded: {}", model_path.display());
 
     // ── WGC セッション作成 ─────────────────────────────────────────────────
     let session = match tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd)) {
@@ -81,7 +74,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
         active: true, fps: 5.0, window_title: None, yolo_loaded: yolo.is_loaded(),
     });
 
-    let mut detector           = ResultDetector::new();
     let interval               = Duration::from_millis(200); // 5 fps
     let mut pending_match_id: Option<String> = None;
     let mut frame_count: u64   = 0;
@@ -106,10 +98,8 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
             log::debug!("[capture_loop] frame #{frame_count} {}x{}", frame.width, frame.height);
         }
 
-        // ══════════════════════════════════════════════════════════════════
-        // YOLO パス
-        // ══════════════════════════════════════════════════════════════════
-        if yolo.is_loaded() {
+        // ── YOLO 検知 ────────────────────────────────────────────────────────
+        {
             let dets = match tokio::task::block_in_place(|| yolo.detect(&frame)) {
                 Ok(d)  => d,
                 Err(e) => {
@@ -192,57 +182,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                         }
                     }
                 }
-            }
-
-        // ══════════════════════════════════════════════════════════════════
-        // ピクセルフォールバックパス (YOLO 未配置)
-        // ══════════════════════════════════════════════════════════════════
-        } else {
-            let detection = match tokio::task::block_in_place(|| detector.detect(&frame)) {
-                Ok(d)  => d,
-                Err(e) => {
-                    log::warn!("[capture_loop] pixel detect: {e}");
-                    tokio::time::sleep(interval).await;
-                    continue;
-                }
-            };
-
-            match &detection {
-                DetectionResult::BattleStarted => {
-                    if pending_match_id.is_none() {
-                        let m = new_in_progress_match();
-                        pending_match_id = Some(m.id.clone());
-                        log::info!("[capture_loop] battle started (pixel) id={}", m.id);
-                        let _ = app.emit("battle_started", MatchDetectedPayload {
-                            match_data: m, ocr_confidence: 1.0,
-                        });
-                    }
-                }
-                DetectionResult::Win { arrow_y_ratio } | DetectionResult::Lose { arrow_y_ratio } => {
-                    let result_str = detection.result_str().unwrap();
-                    match tokio::task::block_in_place(|| extract_match_data(&frame, result_str, *arrow_y_ratio)) {
-                        Ok(data) => {
-                            let id = pending_match_id.take();
-                            let match_record = new_match_from_ocr(
-                                id, &data.result,
-                                data.kill_count, data.death_count, data.special_count,
-                                data.xp_after, data.rule, data.stage,
-                                None, // ピクセルパスではモードを取得しない
-                                None, // ピクセルパスでは金表彰取得なし
-                            );
-                            log::info!(
-                                "[capture_loop] pixel result id={} result={} rule={:?} stage={:?}",
-                                match_record.id, match_record.result,
-                                match_record.rule, match_record.stage,
-                            );
-                            let _ = app.emit("match_detected", MatchDetectedPayload {
-                                match_data: match_record, ocr_confidence: 1.0,
-                            });
-                        }
-                        Err(e) => log::error!("[capture_loop] pixel extraction failed: {e}"),
-                    }
-                }
-                DetectionResult::NotDetected => {}
             }
         }
 
