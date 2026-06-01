@@ -37,6 +37,7 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
     }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load, refreshKey]);
 
   const filtered = allMatches.filter((m) => {
