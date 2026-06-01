@@ -89,6 +89,7 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
       death_count: death !== '' ? parseInt(death, 10) : null,
       special_count: special !== '' ? parseInt(special, 10) : null,
       xp_after: xp !== '' ? parseFloat(xp) : null,
+      gold_award_count: initialMatch?.gold_award_count ?? null,
       tags: JSON.stringify(tags),
       note: note || null,
     };
