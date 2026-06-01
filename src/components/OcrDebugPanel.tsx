@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload } from '../types';
+import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult } from '../types';
 
 export function OcrDebugPanel() {
   const [minimized, setMinimized] = useState(true);
@@ -44,6 +44,26 @@ export function OcrDebugPanel() {
   const [diagResult, setDiagResult] = useState<CaptureDebugResult | null>(null);
   const [diagError, setDiagError]   = useState<string | null>(null);
   const [diagLoading, setDiagLoading] = useState(false);
+
+  // ── YOLO 診断 ──────────────────────────────────────────────────────────────
+  const [yoloResult, setYoloResult]   = useState<YoloDebugResult | null>(null);
+  const [yoloError, setYoloError]     = useState<string | null>(null);
+  const [yoloLoading, setYoloLoading] = useState(false);
+
+  const runYoloDiag = async () => {
+    if (diagHwnd == null) return;
+    setYoloLoading(true);
+    setYoloError(null);
+    setYoloResult(null);
+    try {
+      const res = await invoke<YoloDebugResult>('debug_yolo', { hwnd: diagHwnd });
+      setYoloResult(res);
+    } catch (e) {
+      setYoloError(String(e));
+    } finally {
+      setYoloLoading(false);
+    }
+  };
 
   const loadWindows = async () => {
     try {
@@ -155,7 +175,56 @@ export function OcrDebugPanel() {
           >
             {diagLoading ? '…' : '診断'}
           </button>
+          <button
+            className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            onClick={runYoloDiag}
+            disabled={yoloLoading || diagHwnd == null}
+          >
+            {yoloLoading ? '…' : 'YOLO'}
+          </button>
         </div>
+
+        {/* YOLO 診断結果 */}
+        {yoloError && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all mb-2">
+            ❌ {yoloError}
+          </div>
+        )}
+        {yoloResult && (
+          <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-1">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">YOLO診断</span>
+              <span className="text-slate-300 font-mono">{yoloResult.frame_w}×{yoloResult.frame_h}</span>
+            </div>
+            {yoloResult.error && (
+              <p className="text-red-400 break-all">{yoloResult.error}</p>
+            )}
+            {yoloResult.detections.length === 0 ? (
+              <p className="text-yellow-400">検出なし (信頼度0.10以上の候補がゼロ → モデルかフレームに問題あり)</p>
+            ) : (
+              <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                {yoloResult.detections
+                  .sort((a, b) => b.confidence - a.confidence)
+                  .map((d, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-slate-900 rounded px-1.5 py-0.5">
+                      <span className={`font-bold w-4 text-right ${d.confidence >= 0.70 ? 'text-green-400' : d.confidence >= 0.40 ? 'text-yellow-400' : 'text-slate-500'}`}>
+                        {d.confidence >= 0.70 ? '✓' : d.confidence >= 0.40 ? '△' : '✗'}
+                      </span>
+                      <span className="text-white font-mono w-24 truncate">{d.class_name}</span>
+                      <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+                        <div
+                          className={`h-1.5 rounded-full ${d.confidence >= 0.70 ? 'bg-green-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+                          style={{ width: `${Math.round(d.confidence * 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-slate-300 font-mono w-10 text-right">{(d.confidence * 100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+            <p className="text-slate-500 text-xs">✓=0.70↑(有効) △=0.40-0.70(閾値未満) ✗=0.10-0.40(弱い)</p>
+          </div>
+        )}
 
         {diagError && (
           <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all">

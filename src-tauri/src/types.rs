@@ -120,3 +120,25 @@ pub struct CaptureDebugResult {
     pub y_spread: u32,
     pub detection_summary: String,
 }
+
+/// debug_yolo コマンドの診断結果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YoloDebugDetection {
+    pub class_name: String,
+    pub class_id: usize,
+    pub confidence: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YoloDebugResult {
+    pub frame_w: u32,
+    pub frame_h: u32,
+    pub model_loaded: bool,
+    /// 信頼度 0.10 以上の全検出 (通常の閾値 0.70 より低い)
+    pub detections: Vec<YoloDebugDetection>,
+    pub error: Option<String>,
+}

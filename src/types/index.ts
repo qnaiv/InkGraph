@@ -67,6 +67,24 @@ export interface CaptureDebugResult {
   detection_summary: string;
 }
 
+export interface YoloDebugDetection {
+  class_name: string;
+  class_id: number;
+  confidence: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface YoloDebugResult {
+  frame_w: number;
+  frame_h: number;
+  model_loaded: boolean;
+  detections: YoloDebugDetection[];
+  error: string | null;
+}
+
 export interface XpDataPoint {
   played_at: string;
   xp_after: number;

@@ -15,6 +15,7 @@ pub mod types;
 use state::AppState;
 use commands::{
     debug_capture,
+    debug_yolo,
     list_windows,
     start_capture,
     stop_capture,
@@ -76,6 +77,7 @@ pub fn run() {
             start_capture,
             stop_capture,
             debug_capture,
+            debug_yolo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running InkGraph");

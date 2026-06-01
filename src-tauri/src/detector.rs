@@ -694,6 +694,17 @@ impl YoloDetector {
 
     pub fn is_loaded(&self) -> bool { self.session.is_some() }
 
+    /// デバッグ用: 閾値 0.10 で検出して全候補を返す。
+    /// 通常の閾値 (0.70) では捨てられる低確信度候補も含めることで
+    /// モデルが何を見ているか診断できる。
+    pub fn detect_debug(&mut self, frame: &CapturedFrame) -> Result<Vec<Detection>> {
+        let orig = self.conf_threshold;
+        self.conf_threshold = 0.10;
+        let result = self.detect(frame);
+        self.conf_threshold = orig;
+        result
+    }
+
     /// モデルをロードし ort セッションを初期化する。
     /// `load-dynamic` feature では、onnxruntime.dll が
     /// PATH または実行ファイルと同ディレクトリにある必要がある。

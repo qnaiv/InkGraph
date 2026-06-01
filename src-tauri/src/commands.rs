@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
-    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo},
+    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo, YoloDebugResult, YoloDebugDetection},
 };
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,8 @@ pub async fn debug_capture(hwnd: u64) -> Result<CaptureDebugResult, String> {
         use crate::{capture::WindowCaptureSession, detector::debug_detect_frame};
         let session = tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd))
             .map_err(|e| format!("WGC session failed: {e}"))?;
-        let frame = tokio::task::block_in_place(|| session.get_frame())
+        // WGC が最初のフレームを届けるまでリトライ (静止画面では 500ms 超えることがある)
+        let frame = get_frame_with_retry(&session).await
             .map_err(|e| format!("get_frame failed: {e}"))?;
         debug_detect_frame(&frame).map_err(|e| format!("debug_detect failed: {e}"))
     }
@@ -98,6 +99,80 @@ pub async fn debug_capture(hwnd: u64) -> Result<CaptureDebugResult, String> {
         let _ = hwnd;
         Err("debug_capture は Windows 専用です".to_string())
     }
+}
+
+/// YOLO モデルの生検出結果を診断する。
+/// 信頼度 0.10 以上の全検出を返すため、通常の閾値 (0.70) 以下の候補も確認できる。
+#[tauri::command]
+pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::{capture::WindowCaptureSession, detector::YoloDetector};
+
+        let model_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_result.onnx")))
+            .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_result.onnx"));
+
+        let mut yolo = YoloDetector::new(&model_path);
+        let load_result = tokio::task::block_in_place(|| yolo.load());
+
+        if let Err(e) = load_result {
+            return Ok(YoloDebugResult {
+                frame_w: 0, frame_h: 0,
+                model_loaded: false,
+                detections: vec![],
+                error: Some(format!("モデルロード失敗: {e}")),
+            });
+        }
+
+        let session = tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd))
+            .map_err(|e| format!("WGC session failed: {e}"))?;
+        let frame = get_frame_with_retry(&session).await
+            .map_err(|e| format!("get_frame failed: {e}"))?;
+
+        let (fw, fh) = (frame.width, frame.height);
+        let dets = tokio::task::block_in_place(|| yolo.detect_debug(&frame))
+            .map_err(|e| format!("YOLO detect failed: {e}"))?;
+
+        let detections = dets.into_iter().map(|d| YoloDebugDetection {
+            class_name: d.class_name,
+            class_id:   d.class_id,
+            confidence: d.confidence,
+            x1: d.bbox.x1, y1: d.bbox.y1,
+            x2: d.bbox.x2, y2: d.bbox.y2,
+        }).collect();
+
+        Ok(YoloDebugResult {
+            frame_w: fw, frame_h: fh,
+            model_loaded: true,
+            detections,
+            error: None,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = hwnd;
+        Err("debug_yolo は Windows 専用です".to_string())
+    }
+}
+
+/// WGC フレームをリトライ付きで取得する (最大 3秒)。
+/// 静止した画面では最初のフレームが届くまで時間がかかることがある。
+#[cfg(target_os = "windows")]
+async fn get_frame_with_retry(
+    session: &crate::capture::WindowCaptureSession,
+) -> anyhow::Result<crate::capture::CapturedFrame> {
+    for attempt in 0..6 {
+        match tokio::task::block_in_place(|| session.get_frame()) {
+            Ok(f)  => return Ok(f),
+            Err(e) => {
+                if attempt == 5 { return Err(e); }
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+    unreachable!()
 }
 
 /// キャプチャを停止する。
