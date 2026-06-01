@@ -754,6 +754,23 @@ impl YoloDetector {
         let nc          = (output_shape[1] as usize) - 4; // モデルの実クラス数
         let num_anchors = output_shape[2] as usize;       // 8400
 
+        // 初回のみ INFO ログ (nc の不一致をユーザーに明示)
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FIRST_RUN: AtomicBool = AtomicBool::new(true);
+        if FIRST_RUN.swap(false, Ordering::Relaxed) {
+            let code_nc = YoloClass::num_classes();
+            if nc != code_nc {
+                log::warn!(
+                    "[yolo] ⚠️ nc mismatch: ONNX model has nc={nc} but code expects nc={code_nc}. \
+                     Classes with id>={nc} (e.g. Win={}) will not be detected. \
+                     Re-export your ONNX from the latest trained .pt file.",
+                    YoloClass::Win as usize
+                );
+            } else {
+                log::info!("[yolo] nc={nc}, anchors={num_anchors} ✓");
+            }
+        }
+
         log::debug!(
             "[yolo] output shape={:?}, nc(model)={nc}, nc(code)={}, anchors={num_anchors}",
             output_shape, YoloClass::num_classes()
