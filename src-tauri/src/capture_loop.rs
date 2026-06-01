@@ -47,7 +47,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
         db::{new_in_progress_match, new_match_from_ocr},
-        detector::{DetectionResult, ResultDetector, YoloClass, YoloDetector},
+        detector::{pixel_result_check, DetectionResult, ResultDetector, YoloClass, YoloDetector},
         extractor::{extract_from_yolo_detections, extract_match_data},
         types::MatchDetectedPayload,
     };
@@ -137,15 +137,25 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                 // --- 冷却後に Win / Lose / Draw クラスでリザルト検知 ---
                 let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                 if elapsed >= RESULT_COOLDOWN_SECS {
+                    // YOLO で検知 (閾値0.55)、見逃した場合はピクセル判定にフォールバック
+                    let win_conf  = YoloDetector::best_detection(&dets, YoloClass::Win).map(|d| d.confidence).unwrap_or(0.0);
+                    let lose_conf = YoloDetector::best_detection(&dets, YoloClass::Lose).map(|d| d.confidence).unwrap_or(0.0);
+                    let draw_conf = YoloDetector::best_detection(&dets, YoloClass::Draw).map(|d| d.confidence).unwrap_or(0.0);
+                    log::debug!("[capture_loop] result candidates: win={win_conf:.2} lose={lose_conf:.2} draw={draw_conf:.2}");
                     let result_opt =
-                        if YoloDetector::best_detection(&dets, YoloClass::Win).filter(|d| d.confidence >= 0.70).is_some() {
+                        if win_conf >= 0.55 {
                             Some("win")
-                        } else if YoloDetector::best_detection(&dets, YoloClass::Lose).filter(|d| d.confidence >= 0.70).is_some() {
+                        } else if lose_conf >= 0.55 {
                             Some("lose")
-                        } else if YoloDetector::best_detection(&dets, YoloClass::Draw).filter(|d| d.confidence >= 0.70).is_some() {
+                        } else if draw_conf >= 0.55 {
                             Some("draw")
                         } else {
-                            None
+                            // YOLO が低信頼度の場合はピクセル判定で補完
+                            let px = pixel_result_check(&frame);
+                            if px.is_some() {
+                                log::info!("[capture_loop] YOLO miss → pixel fallback: {:?}", px);
+                            }
+                            px
                         };
 
                     if let Some(result_str) = result_opt {

@@ -384,6 +384,23 @@ fn count_yellow_arrow_pixels(frame: &CapturedFrame) -> (u32, u32, f32, u32) {
     (win_count, lose_count, centroid_y, y_spread)
 }
 
+/// YOLO が Win/Lose/Draw を検知できなかった場合の補助判定。
+/// グレー行数 + 黄色矢印ピクセルのみで win/lose/None を返す。
+pub fn pixel_result_check(frame: &CapturedFrame) -> Option<&'static str> {
+    let (win_grey, lose_grey) = count_grey_rows(frame);
+    if win_grey < RESULT_GREY_ROWS_MIN_PER_HALF || lose_grey < RESULT_GREY_ROWS_MIN_PER_HALF {
+        return None;
+    }
+    let (win_px, lose_px, _, _) = count_yellow_arrow_pixels(frame);
+    if win_px >= MIN_YELLOW_PIXELS {
+        Some("win")
+    } else if lose_px >= MIN_YELLOW_PIXELS {
+        Some("lose")
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ユーティリティ: BGRA8 クロップ
 // ---------------------------------------------------------------------------
