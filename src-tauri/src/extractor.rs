@@ -41,11 +41,16 @@ pub fn extract_from_yolo_detections(
     let mode  = extract_ocr_from_class(frame, detections, YoloClass::ModeText,  "ja-JP")
         .and_then(|t| normalize_mode(&t));
 
-    // KDA: MyPlayerRow BBox の y 中心 → 固定列位置でクロップ → OCR
-    let kda_y = YoloDetector::best_detection(detections, YoloClass::MyPlayerRow)
+    // KDA: MyArrow BBox の y 中心 → 固定列位置でクロップ → OCR
+    let kda_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
         .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
         .unwrap_or(0.5);
     let (kill_count, assist_count, death_count) = extract_kda(frame, kda_y)?;
+
+    // GoldAward: 検出された BBox の数 = 取得した金表彰の枚数
+    let gold_award_count = detections.iter()
+        .filter(|d| d.class_id == YoloClass::GoldAward as usize)
+        .count() as i64;
 
     Ok(ExtractedMatchData {
         result: result.to_string(),
@@ -56,6 +61,7 @@ pub fn extract_from_yolo_detections(
         xp_after: None, // フェーズ2 (Xパワー画面) で実装
         rule,
         stage,
+        gold_award_count: Some(gold_award_count),
     })
 }
 
@@ -117,6 +123,7 @@ pub fn extract_match_data(
         xp_after,
         rule,
         stage,
+        gold_award_count: None, // ピクセルパスでは金表彰取得なし
     })
 }
 

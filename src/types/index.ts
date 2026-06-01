@@ -7,11 +7,12 @@ export interface Match {
   rule: string | null;
   stage: string | null;
   weapon: string | null;
-  result: 'win' | 'lose' | 'in_progress';
+  result: 'win' | 'lose' | 'draw' | 'in_progress';
   kill_count: number | null;
   assist_count: number | null;
   death_count: number | null;
   xp_after: number | null;
+  gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う
   note: string | null;
   created_at?: string;
@@ -68,7 +69,7 @@ export interface CaptureDebugResult {
 export interface XpDataPoint {
   played_at: string;
   xp_after: number;
-  result: 'win' | 'lose' | 'in_progress';
+  result: 'win' | 'lose' | 'draw' | 'in_progress';
 }
 
 // ルール一覧

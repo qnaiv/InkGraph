@@ -44,6 +44,12 @@ pub fn run() {
                         sql: include_str!("../migrations/002_add_mode.sql"),
                         kind: tauri_plugin_sql::MigrationKind::Up,
                     },
+                    tauri_plugin_sql::Migration {
+                        version: 3,
+                        description: "add gold_award_count column",
+                        sql: include_str!("../migrations/003_add_gold_award.sql"),
+                        kind: tauri_plugin_sql::MigrationKind::Up,
+                    },
                 ],
             )
             .build())

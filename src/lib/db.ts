@@ -32,7 +32,7 @@ export async function selectMatches(
   const db = await getDb();
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
-    kill_count, assist_count, death_count, xp_after,
+    kill_count, assist_count, death_count, xp_after, gold_award_count,
     tags, note, created_at, updated_at
   `;
   if (rule) {
@@ -57,8 +57,8 @@ export async function insertMatch(m: RawMatch): Promise<void> {
   await db.execute(
     `INSERT INTO matches
        (id, played_at, mode, rule, stage, weapon, result,
-        kill_count, assist_count, death_count, xp_after, tags, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        kill_count, assist_count, death_count, xp_after, gold_award_count, tags, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
     [
       m.id,
       m.played_at,
@@ -67,10 +67,11 @@ export async function insertMatch(m: RawMatch): Promise<void> {
       m.stage  ?? null,
       m.weapon ?? null,
       m.result,
-      m.kill_count   ?? null,
-      m.assist_count ?? null,
-      m.death_count  ?? null,
-      m.xp_after     ?? null,
+      m.kill_count        ?? null,
+      m.assist_count      ?? null,
+      m.death_count       ?? null,
+      m.xp_after          ?? null,
+      m.gold_award_count  ?? null,
       m.tags ?? '[]',
       m.note ?? null,
     ],
@@ -91,17 +92,18 @@ export async function updateMatchResult(m: RawMatch): Promise<void> {
     `UPDATE matches
      SET result = $1, mode = $2, rule = $3, stage = $4,
          kill_count = $5, assist_count = $6, death_count = $7, xp_after = $8,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $9`,
+         gold_award_count = $9, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $10`,
     [
       m.result,
-      m.mode          ?? null,
-      m.rule          ?? null,
-      m.stage         ?? null,
-      m.kill_count    ?? null,
-      m.assist_count  ?? null,
-      m.death_count   ?? null,
-      m.xp_after      ?? null,
+      m.mode             ?? null,
+      m.rule             ?? null,
+      m.stage            ?? null,
+      m.kill_count       ?? null,
+      m.assist_count     ?? null,
+      m.death_count      ?? null,
+      m.xp_after         ?? null,
+      m.gold_award_count ?? null,
       m.id,
     ],
   );

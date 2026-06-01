@@ -22,6 +22,7 @@ pub struct Match {
     pub assist_count: Option<i64>,
     pub death_count: Option<i64>,
     pub xp_after: Option<f64>,
+    pub gold_award_count: Option<i64>,
     pub tags: Option<String>, // JSON 配列文字列
     pub note: Option<String>,
     pub created_at: Option<String>,
@@ -50,6 +51,7 @@ pub struct ExtractedMatchData {
     pub xp_after: Option<f64>,
     pub rule: Option<String>,
     pub stage: Option<String>,
+    pub gold_award_count: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

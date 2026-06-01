@@ -3,9 +3,10 @@
 /// 検知フロー:
 ///
 ///   ┌─ YOLO パス (yolo_result.onnx が配置済みの場合) ──────────────────────┐
-///   │  バトル開始: ピクセル検知 (暗巻物 + OCR)                              │
-///   │  リザルト検知: YOLO → BBox クロップ → 白文字抽出 → WinRT OCR         │
-///   │  取得項目: 勝ち/負け, ルール, ステージ, モード, キル/デス/SP          │
+///   │  バトル開始: YOLO BattleStart クラスで検知                            │
+///   │  リザルト検知: YOLO Win/Lose/Draw → BBox クロップ → WinRT OCR        │
+///   │  取得項目: 勝ち/負け/引き分け, ルール, ステージ, モード, キル/デス/SP │
+///   │            金表彰枚数 (GoldAward 検出数)                              │
 ///   └──────────────────────────────────────────────────────────────────────┘
 ///   ┌─ ピクセルフォールバック (モデル未配置の場合) ─────────────────────────┐
 ///   │  バトル開始: ピクセル検知                                              │
@@ -109,47 +110,43 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
         // YOLO パス
         // ══════════════════════════════════════════════════════════════════
         if yolo.is_loaded() {
-            if detector.is_waiting() {
-                // --- バトル開始をピクセル検知 ---
-                let det = match tokio::task::block_in_place(|| detector.detect(&frame)) {
-                    Ok(d)  => d,
-                    Err(e) => {
-                        log::warn!("[capture_loop] pixel detect: {e}");
-                        tokio::time::sleep(interval).await;
-                        continue;
-                    }
-                };
-                if matches!(det, DetectionResult::BattleStarted) && pending_match_id.is_none() {
+            let dets = match tokio::task::block_in_place(|| yolo.detect(&frame)) {
+                Ok(d)  => d,
+                Err(e) => {
+                    log::warn!("[capture_loop] yolo detect: {e}");
+                    tokio::time::sleep(interval).await;
+                    continue;
+                }
+            };
+
+            if pending_match_id.is_none() {
+                // --- BattleStart クラスで試合開始を検知 ---
+                if YoloDetector::best_detection(&dets, YoloClass::BattleStart)
+                    .filter(|d| d.confidence >= 0.60)
+                    .is_some()
+                {
                     let m = new_in_progress_match();
                     pending_match_id  = Some(m.id.clone());
                     battle_started_at = Some(Instant::now());
-                    log::info!("[capture_loop] battle started (YOLO path) id={}", m.id);
+                    log::info!("[capture_loop] battle started (YOLO BattleStart) id={}", m.id);
                     let _ = app.emit("battle_started", MatchDetectedPayload {
                         match_data: m, ocr_confidence: 1.0,
                     });
                 }
             } else {
-                // --- InGame: 冷却後に YOLO でリザルト検知 ---
+                // --- 冷却後に Win / Lose / Draw クラスでリザルト検知 ---
                 let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                 if elapsed >= RESULT_COOLDOWN_SECS {
-                    let dets = match tokio::task::block_in_place(|| yolo.detect(&frame)) {
-                        Ok(d)  => d,
-                        Err(e) => {
-                            log::warn!("[capture_loop] yolo detect: {e}");
-                            tokio::time::sleep(interval).await;
-                            continue;
-                        }
-                    };
-
-                    // MyPlayerRow が確信度 0.70 以上で検出されたか確認
-                    // → y 中心が PANEL_BOUNDARY_Y_RATIO より上 = WIN パネル内 = 勝ち
-                    use crate::detector::PANEL_BOUNDARY_Y_RATIO;
-                    let result_opt = YoloDetector::best_detection(&dets, YoloClass::MyPlayerRow)
-                        .filter(|d| d.confidence >= 0.70)
-                        .map(|d| {
-                            let y_center = (d.bbox.y1 + d.bbox.y2) / 2.0;
-                            if y_center < PANEL_BOUNDARY_Y_RATIO { "win" } else { "lose" }
-                        });
+                    let result_opt =
+                        if YoloDetector::best_detection(&dets, YoloClass::Win).filter(|d| d.confidence >= 0.70).is_some() {
+                            Some("win")
+                        } else if YoloDetector::best_detection(&dets, YoloClass::Lose).filter(|d| d.confidence >= 0.70).is_some() {
+                            Some("lose")
+                        } else if YoloDetector::best_detection(&dets, YoloClass::Draw).filter(|d| d.confidence >= 0.70).is_some() {
+                            Some("draw")
+                        } else {
+                            None
+                        };
 
                     if let Some(result_str) = result_opt {
                         match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str)) {
@@ -160,6 +157,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                     id, &data.result,
                                     data.kill_count, data.assist_count, data.death_count,
                                     data.xp_after, data.rule, data.stage, data.mode,
+                                    data.gold_award_count,
                                 );
                                 log::info!(
                                     "[capture_loop] YOLO result id={} result={} mode={:?} rule={:?} stage={:?}",
@@ -169,7 +167,6 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                 let _ = app.emit("match_detected", MatchDetectedPayload {
                                     match_data: match_record, ocr_confidence: 1.0,
                                 });
-                                detector.reset_to_waiting();
                             }
                             Err(e) => log::error!("[capture_loop] YOLO extraction failed: {e}"),
                         }
@@ -211,6 +208,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                 data.kill_count, data.assist_count, data.death_count,
                                 data.xp_after, data.rule, data.stage,
                                 None, // ピクセルパスではモードを取得しない
+                                None, // ピクセルパスでは金表彰取得なし
                             );
                             log::info!(
                                 "[capture_loop] pixel result id={} result={} rule={:?} stage={:?}",
@@ -262,6 +260,7 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
         Some("ガチエリア".to_string()),
         Some("マテガイ放水路".to_string()),
         Some("Xマッチ".to_string()),
+        Some(1), // スタブ: 金表彰1枚
     );
     let _ = app.emit("match_detected", MatchDetectedPayload {
         match_data: result, ocr_confidence: 0.0,

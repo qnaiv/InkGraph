@@ -15,6 +15,7 @@ pub fn new_in_progress_match() -> Match {
     Match {
         id: Uuid::new_v4().to_string(),
         played_at: Utc::now().to_rfc3339(),
+        mode: None,
         rule: None,
         stage: None,
         weapon: None,
@@ -23,6 +24,7 @@ pub fn new_in_progress_match() -> Match {
         assist_count: None,
         death_count: None,
         xp_after: None,
+        gold_award_count: None,
         tags: Some("[]".to_string()),
         note: None,
         created_at: None,
@@ -44,6 +46,7 @@ pub fn new_match_from_ocr(
     rule: Option<String>,
     stage: Option<String>,
     mode: Option<String>,
+    gold_award_count: Option<i64>,
 ) -> Match {
     Match {
         id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -57,6 +60,7 @@ pub fn new_match_from_ocr(
         assist_count,
         death_count,
         xp_after,
+        gold_award_count,
         tags: Some("[]".to_string()),
         note: None,
         created_at: None,
@@ -79,7 +83,7 @@ mod tests {
     #[test]
     fn test_new_match_reuses_id() {
         let id = "existing-id".to_string();
-        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(2341.5), None, None, Some("Xマッチ".to_string()));
+        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(2341.5), None, None, Some("Xマッチ".to_string()), None);
         assert_eq!(m.id, id);
         assert_eq!(m.result, "win");
         assert_eq!(m.mode.as_deref(), Some("Xマッチ"));
@@ -87,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_new_match_generates_id_when_none() {
-        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None, None);
+        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None, None, None);
         assert!(!m.id.is_empty());
         assert_eq!(m.result, "lose");
         assert!(m.mode.is_none());
