@@ -162,10 +162,29 @@ fn extract_rule(frame: &CapturedFrame) -> Option<String> {
 }
 
 fn extract_stage(frame: &CapturedFrame) -> Option<String> {
+    normalize_stage(&extract_stage_raw(frame))
+}
+
+/// ルール ROI の生 OCR テキストを返す（デバッグ・通常抽出共用）
+pub fn extract_rule_raw(frame: &CapturedFrame) -> String {
+    let (x, y, w, h) = RULE_ROI.to_pixels(frame.width, frame.height);
+    let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let preprocessed = preprocess_bgra(&roi, w, h);
+    ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
+        .ok()
+        .map(|r| r.text.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// ステージ ROI の生 OCR テキストを返す（デバッグ・通常抽出共用）
+pub fn extract_stage_raw(frame: &CapturedFrame) -> String {
     let (x, y, w, h) = STAGE_ROI.to_pixels(frame.width, frame.height);
     let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
     let preprocessed = preprocess_bgra(&roi, w, h);
-    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP")).ok()?.text;
+    ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
+        .ok()
+        .map(|r| r.text.trim().to_string())
+        .unwrap_or_default()
     normalize_stage(text.trim())
 }
 

@@ -114,6 +114,18 @@ mod windows_impl {
             out[i * 4 + 3] = 255;
         }
 
+        // Step 4: 黒ピクセルが過半数 = 白文字/黒背景 → 反転して黒文字/白背景に統一
+        // WinRT OCR は黒文字・白背景で精度が高いため
+        let black_count = (0..n).filter(|&i| out[i * 4] == 0).count();
+        if black_count * 2 > n {
+            for i in 0..n {
+                let v = 255 - out[i * 4];
+                out[i * 4] = v;
+                out[i * 4 + 1] = v;
+                out[i * 4 + 2] = v;
+            }
+        }
+
         out
     }
 

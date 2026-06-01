@@ -12,6 +12,7 @@
 
 use crate::{
     capture::CapturedFrame,
+    extractor::{extract_rule_raw, extract_stage_raw, normalize_rule, normalize_stage},
     ocr::{ocr_from_bgra, preprocess_bgra},
 };
 use anyhow::Result;
@@ -149,22 +150,19 @@ impl ResultDetector {
             // Phase 1: バトル開始検知
             // ------------------------------------------------------------------
             DetectorPhase::WaitingForBattle => {
-                // 1a: 暗い巻物背景のピクセル判定 (高速・フォント不依存)
-                let dark = detect_dark_scroll(frame);
-
-                // 1b: OCR フォールバック (1a がヒットしたときはスキップ)
-                let battle_start = dark || {
-                    let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
-                        .unwrap_or_default()
-                        .replace(char::is_whitespace, "");
-                    // WinRT OCR は文字間スペースを挿入するため除去して照合
-                    // "開" が落ちる場合もあるので "始します" も補完キーワードとして使う
-                    text.contains("バトル") || text.contains("開始") || text.contains("始します")
-                };
+                // OCR で「バトルを開始します！」テキストを検出
+                // WinRT OCR は文字間スペースを挿入するため除去して照合
+                // "開" が落ちる場合もあるので "始します" も補完キーワードとして使う
+                let text = ocr_roi_raw(frame, &BATTLE_START_ROI, "ja-JP")
+                    .unwrap_or_default()
+                    .replace(char::is_whitespace, "");
+                let battle_start = text.contains("バトル")
+                    || text.contains("開始")
+                    || text.contains("始します");
 
                 if battle_start {
                     self.phase = DetectorPhase::InGame;
-                    log::info!("[detector] battle start (dark={dark}) → InGame");
+                    log::info!("[detector] battle start (OCR) → InGame");
                     return Ok(DetectionResult::BattleStarted);
                 }
                 Ok(DetectionResult::NotDetected)
@@ -244,6 +242,12 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         format!("Phase 2: NOT_DETECTED (WIN_grey={win_grey_rows} LOSE_grey={lose_grey_rows} win_px={yellow_win_px} lose_px={yellow_lose_px})")
     };
 
+    // Phase 2: ルール・ステージ OCR (リザルト画面上部から読む)
+    let rule_ocr_text  = extract_rule_raw(frame);
+    let stage_ocr_text = extract_stage_raw(frame);
+    let rule_normalized  = normalize_rule(&rule_ocr_text);
+    let stage_normalized = normalize_stage(&stage_ocr_text);
+
     Ok(crate::types::CaptureDebugResult {
         frame_w: frame.width,
         frame_h: frame.height,
@@ -254,6 +258,10 @@ pub fn debug_detect_frame(frame: &CapturedFrame) -> Result<crate::types::Capture
         win_text_found,
         win_grey_rows,
         lose_grey_rows,
+        rule_ocr_text,
+        rule_normalized,
+        stage_ocr_text,
+        stage_normalized,
         yellow_win_px,
         yellow_lose_px,
         centroid_y,
@@ -274,8 +282,8 @@ fn ocr_roi_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Result<String> {
     Ok(ocr_from_bgra(&processed, w, h, Some(lang))?.text)
 }
 
-/// 「バトルを開始します！」の暗い巻物背景をピクセル輝度で検出する。
-/// BATTLE_START_ROI 内で輝度 < 40 のピクセルが 25% 以上あれば true。
+/// 暗い巻物背景をピクセル輝度で検出する（診断用・detect() では使用しない）。
+/// BATTLE_START_ROI 内で輝度 < 30 のピクセルが 40% 以上あれば true。
 fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
     let (x0, y0, w, h) = BATTLE_START_ROI.to_pixels(frame.width, frame.height);
     let mut dark = 0u32;
@@ -288,10 +296,10 @@ fn detect_dark_scroll(frame: &CapturedFrame) -> bool {
             let g = frame.bgra[idx + 1] as u32;
             let r = frame.bgra[idx + 2] as u32;
             total += 1;
-            if (299 * r + 587 * g + 114 * b) / 1000 < 40 { dark += 1; }
+            if (299 * r + 587 * g + 114 * b) / 1000 < 30 { dark += 1; }
         }
     }
-    total > 0 && dark * 100 / total >= 25
+    total > 0 && dark * 100 / total >= 40
 }
 
 /// リザルト画面のプレイヤー行をグレー背景で検出する。
