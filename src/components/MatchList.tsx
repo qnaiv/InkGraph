@@ -9,6 +9,7 @@ interface MatchListProps {
   onUpdateWeapon: (id: string, weapon: string) => void;
   onUpdateTags: (id: string, tags: string[]) => void;
   onUpdateNote: (id: string, note: string) => void;
+  onEdit?: (match: Match) => void;
 }
 
 export function MatchList({
@@ -17,6 +18,7 @@ export function MatchList({
   onUpdateWeapon,
   onUpdateTags,
   onUpdateNote,
+  onEdit,
 }: MatchListProps) {
   if (isLoading) {
     return (
@@ -44,6 +46,7 @@ export function MatchList({
           onUpdateWeapon={onUpdateWeapon}
           onUpdateTags={onUpdateTags}
           onUpdateNote={onUpdateNote}
+          onEdit={onEdit}
         />
       ))}
     </div>

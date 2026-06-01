@@ -171,6 +171,7 @@ export async function selectAllMatches(rule?: string | null): Promise<RawMatch[]
   const db = await getDb();
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
+<<<<<<< HEAD
     kill_count, death_count, special_count, xp_after, gold_award_count,
     tags, note, created_at, updated_at
   `;

@@ -1,9 +1,9 @@
-// InkGraph — 手動試合入力モーダル
+// InkGraph — 手動試合入力 / 編集モーダル
 
 import { useState } from 'react';
 import { RULES, PRESET_TAGS } from '../types';
 import { WeaponPicker } from './WeaponPicker';
-import type { RawMatch } from '../types';
+import type { Match, RawMatch } from '../types';
 
 const MODES = [
   'Xマッチ',
@@ -34,25 +34,40 @@ const STAGES = [
 ];
 
 interface Props {
+  /** 既存の試合を渡すと編集モードになる */
+  initialMatch?: Match;
   onClose: () => void;
   onSubmit: (match: RawMatch) => Promise<void>;
 }
 
-export function ManualEntryModal({ onClose, onSubmit }: Props) {
+export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
+  const isEdit = initialMatch != null;
   const nowStr = new Date().toISOString().slice(0, 16);
 
-  const [playedAt, setPlayedAt] = useState(nowStr);
-  const [result, setResult] = useState<'win' | 'lose'>('win');
-  const [mode, setMode] = useState('Xマッチ');
-  const [rule, setRule] = useState<string>(RULES[0]);
-  const [stage, setStage] = useState('');
-  const [weapon, setWeapon] = useState<string | null>(null);
-  const [kill, setKill] = useState('');
-  const [death, setDeath] = useState('');
-  const [special, setSpecial] = useState('');
-  const [xp, setXp] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [note, setNote] = useState('');
+  const [playedAt, setPlayedAt] = useState(
+    isEdit ? new Date(initialMatch.played_at).toISOString().slice(0, 16) : nowStr,
+  );
+  const [result, setResult] = useState<'win' | 'lose'>(
+    initialMatch?.result === 'lose' ? 'lose' : 'win',
+  );
+  const [mode, setMode] = useState(initialMatch?.mode ?? 'Xマッチ');
+  const [rule, setRule] = useState<string>(initialMatch?.rule ?? RULES[0]);
+  const [stage, setStage] = useState(initialMatch?.stage ?? '');
+  const [weapon, setWeapon] = useState<string | null>(initialMatch?.weapon ?? null);
+  const [kill, setKill] = useState(
+    initialMatch?.kill_count != null ? String(initialMatch.kill_count) : '',
+  );
+  const [death, setDeath] = useState(
+    initialMatch?.death_count != null ? String(initialMatch.death_count) : '',
+  );
+  const [special, setSpecial] = useState(
+    initialMatch?.special_count != null ? String(initialMatch.special_count) : '',
+  );
+  const [xp, setXp] = useState(
+    initialMatch?.xp_after != null ? String(initialMatch.xp_after) : '',
+  );
+  const [tags, setTags] = useState<string[]>(initialMatch?.tags ?? []);
+  const [note, setNote] = useState(initialMatch?.note ?? '');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const toggleTag = (tag: string) =>
@@ -63,7 +78,7 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     const match: RawMatch = {
-      id: crypto.randomUUID(),
+      id: isEdit ? initialMatch.id : crypto.randomUUID(),
       played_at: new Date(playedAt).toISOString(),
       result,
       mode: mode || null,
@@ -93,7 +108,9 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
       >
         {/* ヘッダー */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
-          <h2 className="text-white font-semibold text-base">手動入力</h2>
+          <h2 className="text-white font-semibold text-base">
+            {isEdit ? '試合を編集' : '手動入力'}
+          </h2>
           <button
             onClick={onClose}
             className="text-slate-400 hover:text-white text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-slate-700 transition-colors"
@@ -285,7 +302,7 @@ export function ManualEntryModal({ onClose, onSubmit }: Props) {
             onClick={handleSubmit}
             disabled={isSubmitting}
           >
-            {isSubmitting ? '保存中...' : '保存'}
+            {isSubmitting ? (isEdit ? '更新中...' : '保存中...') : (isEdit ? '更新' : '保存')}
           </button>
         </div>
       </div>
