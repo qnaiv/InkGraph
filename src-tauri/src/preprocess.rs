@@ -4,7 +4,7 @@
 /// WinRT OCR 精度向上のための白文字抽出・二値化を提供する。
 
 use anyhow::Result;
-use image::{DynamicImage, GrayImage, ImageBuffer, Luma, Rgb, RgbImage, RgbaImage};
+use image::{DynamicImage, GrayImage, ImageBuffer, Rgb, RgbImage, RgbaImage};
 
 // ---------------------------------------------------------------------------
 // BGRA8 ↔ image クレート 変換
@@ -179,7 +179,7 @@ pub fn otsu_binarize(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
         ImageBuffer::from_raw(width, height, gray_data).expect("size mismatch");
 
     let threshold = imageproc::contrast::otsu_level(&gray_img);
-    let bin = imageproc::contrast::threshold(&gray_img, threshold);
+    let bin = imageproc::contrast::threshold(&gray_img, threshold, imageproc::contrast::ThresholdType::Binary);
 
     // GrayImage → BGRA8
     bin.into_raw()

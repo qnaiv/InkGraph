@@ -568,9 +568,9 @@ mod tests {
 //   Detection.bbox は元フレームに対する正規化座標 [0, 1]。
 //   capture_loop で frame.width / frame.height を掛けてピクセル座標へ変換する。
 
-use crate::preprocess::{letterbox_bgra, LetterboxParams};
+use crate::preprocess::letterbox_bgra;
 use ndarray::Array4;
-use ort::{GraphOptimizationLevel, Session};
+use ort::{session::{Session, builder::GraphOptimizationLevel}, value::Tensor};
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
@@ -737,7 +737,8 @@ impl YoloDetector {
         )?;
 
         // 2. 推論実行
-        let outputs = session.run(ort::inputs!["images" => input.view()]?)?;
+        let input_tensor = Tensor::<f32>::from_array(input)?;
+        let outputs = session.run(ort::inputs!["images" => input_tensor])?;
 
         // 3. 出力パース
         // YOLOv8 output shape: [1, 4+num_classes, 8400]
