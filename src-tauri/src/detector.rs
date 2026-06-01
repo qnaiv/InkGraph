@@ -568,9 +568,8 @@ mod tests {
 //   Detection.bbox は元フレームに対する正規化座標 [0, 1]。
 //   capture_loop で frame.width / frame.height を掛けてピクセル座標へ変換する。
 
-use crate::preprocess::{letterbox_bgra, LetterboxParams};
-use ndarray::Array4;
-use ort::{GraphOptimizationLevel, Session};
+use crate::preprocess::letterbox_bgra;
+use ort::{session::{Session, builder::GraphOptimizationLevel}, value::Tensor};
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
@@ -707,8 +706,10 @@ impl YoloDetector {
         }
 
         let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(2)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .with_intra_threads(2)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
             .commit_from_file(&self.model_path)?;
 
         log::info!("[yolo] model loaded: {}", self.model_path.display());
@@ -719,8 +720,8 @@ impl YoloDetector {
     /// フレームに対して推論を実行し、確信度閾値を超えた `Detection` 一覧を返す。
     ///
     /// モデル未ロード時は即座に `Ok(vec![])` を返す (ロード前の呼び出しを安全に無視)。
-    pub fn detect(&self, frame: &CapturedFrame) -> Result<Vec<Detection>> {
-        let session = match &self.session {
+    pub fn detect(&mut self, frame: &CapturedFrame) -> Result<Vec<Detection>> {
+        let session = match &mut self.session {
             Some(s) => s,
             None    => return Ok(vec![]),
         };
@@ -730,37 +731,33 @@ impl YoloDetector {
             &frame.bgra, frame.width, frame.height, YOLO_INPUT_SIZE,
         )?;
 
-        // ndarray: [1, 3, 640, 640]
-        let input = Array4::from_shape_vec(
-            (1, 3, YOLO_INPUT_SIZE as usize, YOLO_INPUT_SIZE as usize),
-            chw,
-        )?;
-
-        // 2. 推論実行
-        let outputs = session.run(ort::inputs!["images" => input.view()]?)?;
+        // 2. 推論実行: shape = [1, 3, 640, 640]
+        let ts = YOLO_INPUT_SIZE as usize;
+        let input_tensor = Tensor::<f32>::from_array((vec![1usize, 3, ts, ts], chw))?;
+        let outputs = session.run(ort::inputs!["images" => input_tensor])?;
 
         // 3. 出力パース
         // YOLOv8 output shape: [1, 4+num_classes, 8400]
-        let output_tensor = outputs["output0"].extract_tensor::<f32>()?;
-        let view = output_tensor.view();
+        // Flat layout (row-major): element [0, row, col] = data[row * num_anchors + col]
+        let (output_shape, output_data) = outputs["output0"].try_extract_tensor::<f32>()?;
 
         let num_classes  = YoloClass::num_classes();
-        let num_anchors  = view.shape()[2]; // 8400
+        let num_anchors  = output_shape[2] as usize; // 8400
 
         let mut raw_detections: Vec<Detection> = Vec::new();
 
         for anchor_idx in 0..num_anchors {
             // cx, cy, w, h (in YOLO input pixel space)
-            let cx = view[[0, 0, anchor_idx]];
-            let cy = view[[0, 1, anchor_idx]];
-            let bw = view[[0, 2, anchor_idx]];
-            let bh = view[[0, 3, anchor_idx]];
+            let cx = output_data[0 * num_anchors + anchor_idx];
+            let cy = output_data[1 * num_anchors + anchor_idx];
+            let bw = output_data[2 * num_anchors + anchor_idx];
+            let bh = output_data[3 * num_anchors + anchor_idx];
 
             // クラス確信度の最大値とそのクラス id を探す
             let mut max_conf   = 0f32;
             let mut max_class  = 0usize;
             for c in 0..num_classes {
-                let score = view[[0, 4 + c, anchor_idx]];
+                let score = output_data[(4 + c) * num_anchors + anchor_idx];
                 if score > max_conf {
                     max_conf  = score;
                     max_class = c;
@@ -880,7 +877,7 @@ mod yolo_tests {
 
     #[test]
     fn test_yolo_detector_not_loaded_returns_empty() {
-        let detector = YoloDetector::new("/nonexistent/path/model.onnx");
+        let mut detector = YoloDetector::new("/nonexistent/path/model.onnx");
         assert!(!detector.is_loaded());
         let frame = crate::capture::CapturedFrame {
             bgra: vec![0u8; 4 * 4 * 4],

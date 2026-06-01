@@ -10,6 +10,7 @@ import {
   dbUpdateWeapon,
   dbUpdateTags,
   dbUpdateNote,
+  dbUpdateFullMatch,
 } from '../lib/db';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,8 @@ interface UseMatchesReturn {
   matches: Match[];
   isLoading: boolean;
   error: string | null;
+  addMatch:     (raw: RawMatch) => Promise<void>;
+  updateMatch:  (raw: RawMatch) => Promise<void>;
   updateWeapon: (id: string, weapon: string) => Promise<void>;
   updateTags:   (id: string, tags: string[]) => Promise<void>;
   updateNote:   (id: string, note: string)   => Promise<void>;
@@ -98,6 +101,18 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     return () => { unlisteners.forEach((fn) => fn()); };
   }, []);
 
+  // ── 手動追加 ─────────────────────────────────────────────────
+  const addMatch = useCallback(async (raw: RawMatch) => {
+    await insertMatch(raw);
+    setMatches((prev) => [parseMatch(raw), ...prev]);
+  }, []);
+
+  // ── 全フィールド更新 ──────────────────────────────────────────
+  const updateMatch = useCallback(async (raw: RawMatch) => {
+    await dbUpdateFullMatch(raw);
+    setMatches((prev) => prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m)));
+  }, []);
+
   // ── 更新操作 ─────────────────────────────────────────────────
   const updateWeapon = useCallback(async (id: string, weapon: string) => {
     await dbUpdateWeapon(id, weapon);
@@ -114,5 +129,5 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, note } : m)));
   }, []);
 
-  return { matches, isLoading, error, updateWeapon, updateTags, updateNote };
+  return { matches, isLoading, error, addMatch, updateMatch, updateWeapon, updateTags, updateNote };
 }

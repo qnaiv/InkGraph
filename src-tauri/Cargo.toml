@@ -40,8 +40,7 @@ anyhow    = "1"
 
 # YOLO/ONNX 推論 (ort 2.x + load-dynamic: onnxruntime.dll を実行時ロード)
 # download-binaries に切り替えるとビルド時に自動ダウンロード
-ort     = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
-ndarray = "0.16"
+ort     = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
 
 # 画像処理 (前処理・リサイズ・二値化)
 image     = "0.25"

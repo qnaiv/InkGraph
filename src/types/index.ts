@@ -9,8 +9,8 @@ export interface Match {
   weapon: string | null;
   result: 'win' | 'lose' | 'draw' | 'in_progress';
   kill_count: number | null;
-  assist_count: number | null;
   death_count: number | null;
+  special_count: number | null;
   xp_after: number | null;
   gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う

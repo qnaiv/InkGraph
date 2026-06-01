@@ -12,6 +12,8 @@ export function WeaponPicker({ currentWeapon, onSelect }: WeaponPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
 
+  // isOpen が変わるたびに最近使ったブキを再取得する意図があるため依存を維持
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const recentWeapons = useMemo(() => getRecentWeapons(5), [isOpen]);
 
   const filteredWeapons = useMemo(() => {

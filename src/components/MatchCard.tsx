@@ -10,9 +10,10 @@ interface MatchCardProps {
   onUpdateWeapon: (id: string, weapon: string) => void;
   onUpdateTags: (id: string, tags: string[]) => void;
   onUpdateNote: (id: string, note: string) => void;
+  onEdit?: (match: Match) => void;
 }
 
-export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }: MatchCardProps) {
+export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote, onEdit }: MatchCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState(match.note ?? '');
   const [noteEditing, setNoteEditing] = useState(false);
@@ -25,9 +26,9 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
   });
 
   const kda = [
-    match.kill_count  != null ? `${match.kill_count}K`  : null,
-    match.assist_count != null ? `${match.assist_count}A` : null,
-    match.death_count != null ? `${match.death_count}D`  : null,
+    match.kill_count    != null ? `${match.kill_count}K`    : null,
+    match.death_count   != null ? `${match.death_count}D`   : null,
+    match.special_count != null ? `${match.special_count}S` : null,
   ].filter(Boolean).join('/');
 
   const handleNoteBlur = () => {
@@ -94,6 +95,14 @@ export function MatchCard({ match, onUpdateWeapon, onUpdateTags, onUpdateNote }:
       {/* 展開セクション: ブキ / タグ / メモ */}
       {expanded && (
         <div className="px-2 pb-3 pt-1 space-y-2 border-t border-slate-700/40">
+          {onEdit && (
+            <button
+              className="w-full py-1 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors border border-indigo-500/30"
+              onClick={() => onEdit(match)}
+            >
+              ✏️ 全項目を編集
+            </button>
+          )}
           <WeaponPicker
             currentWeapon={match.weapon}
             onSelect={(weapon) => onUpdateWeapon(match.id, weapon)}
