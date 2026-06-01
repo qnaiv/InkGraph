@@ -44,7 +44,7 @@ const ARROW_Y_START: f32 = 0.270;
 const ARROW_Y_END:   f32 = 0.940;
 
 /// WIN パネルと LOSE パネルの境界 y 比率
-const PANEL_BOUNDARY_Y: f32 = 0.630;
+pub const PANEL_BOUNDARY_Y: f32 = 0.630;
 
 /// 黄色矢印と判定する最小ピクセル数
 const MIN_YELLOW_PIXELS: u32 = 100;

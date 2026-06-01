@@ -47,7 +47,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
         db::{new_in_progress_match, new_match_from_ocr},
-        detector::{pixel_result_check, DetectionResult, ResultDetector, YoloClass, YoloDetector},
+        detector::{pixel_result_check, DetectionResult, ResultDetector, YoloClass, YoloDetector, PANEL_BOUNDARY_Y},
         extractor::{extract_from_yolo_detections, extract_match_data},
         types::MatchDetectedPayload,
     };
@@ -137,26 +137,36 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                 // --- 冷却後に Win / Lose / Draw クラスでリザルト検知 ---
                 let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                 if elapsed >= RESULT_COOLDOWN_SECS {
-                    // YOLO で検知 (閾値0.55)、見逃した場合はピクセル判定にフォールバック
+                    // Win/Lose クラスはリザルト画面のバナーテキストを検知するため
+                    // 負け画面でも Win が高信頼度で出る。どちらかが 0.30 以上なら
+                    // 「リザルト画面にいる」とみなし、MyArrow の Y 座標で勝敗判定。
                     let win_conf  = YoloDetector::best_detection(&dets, YoloClass::Win).map(|d| d.confidence).unwrap_or(0.0);
                     let lose_conf = YoloDetector::best_detection(&dets, YoloClass::Lose).map(|d| d.confidence).unwrap_or(0.0);
                     let draw_conf = YoloDetector::best_detection(&dets, YoloClass::Draw).map(|d| d.confidence).unwrap_or(0.0);
-                    log::debug!("[capture_loop] result candidates: win={win_conf:.2} lose={lose_conf:.2} draw={draw_conf:.2}");
-                    let result_opt =
-                        if win_conf >= 0.55 {
-                            Some("win")
-                        } else if lose_conf >= 0.55 {
-                            Some("lose")
-                        } else if draw_conf >= 0.55 {
-                            Some("draw")
-                        } else {
-                            // YOLO が低信頼度の場合はピクセル判定で補完
-                            let px = pixel_result_check(&frame);
-                            if px.is_some() {
-                                log::info!("[capture_loop] YOLO miss → pixel fallback: {:?}", px);
-                            }
-                            px
-                        };
+                    let is_result_screen = win_conf >= 0.30 || lose_conf >= 0.30;
+                    log::debug!(
+                        "[capture_loop] result candidates: win={win_conf:.2} lose={lose_conf:.2} draw={draw_conf:.2} result_screen={is_result_screen}"
+                    );
+                    let result_opt = if draw_conf >= 0.55 {
+                        Some("draw")
+                    } else if is_result_screen {
+                        // MyArrow Y 中心 < PANEL_BOUNDARY_Y (0.630) → WIN 側、>= → LOSE 側
+                        let arrow_y = YoloDetector::best_detection(&dets, YoloClass::MyArrow)
+                            .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0);
+                        log::info!("[capture_loop] result screen, MyArrow y={:?}", arrow_y);
+                        match arrow_y {
+                            Some(y) if y < PANEL_BOUNDARY_Y => Some("win"),
+                            Some(_)                          => Some("lose"),
+                            None                             => pixel_result_check(&frame),
+                        }
+                    } else {
+                        // YOLO がリザルト画面を認識できなかった場合はピクセル判定
+                        let px = pixel_result_check(&frame);
+                        if px.is_some() {
+                            log::info!("[capture_loop] YOLO miss → pixel fallback: {:?}", px);
+                        }
+                        px
+                    };
 
                     if let Some(result_str) = result_opt {
                         match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str)) {
