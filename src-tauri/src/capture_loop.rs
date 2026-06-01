@@ -14,7 +14,7 @@
 ///   │  取得項目: 勝ち/負け, ルール, ステージ, キル/デス/SP (モードなし)     │
 ///   └──────────────────────────────────────────────────────────────────────┘
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use crate::{
     state::AppState,
