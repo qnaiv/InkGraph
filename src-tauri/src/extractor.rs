@@ -192,7 +192,6 @@ pub fn extract_stage_raw(frame: &CapturedFrame) -> String {
         .ok()
         .map(|r| r.text.trim().to_string())
         .unwrap_or_default()
-    normalize_stage(text.trim())
 }
 
 fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Option<i64> {
