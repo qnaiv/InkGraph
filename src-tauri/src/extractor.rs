@@ -212,12 +212,31 @@ fn clean_numeric_text(text: &str) -> String {
 // 正規化
 // ---------------------------------------------------------------------------
 
+/// ひらがな→カタカナ、小書きカタカナ→大書きに正規化（OCR 誤読対策）。
+fn normalize_kana(s: &str) -> String {
+    s.chars().map(|c| {
+        let k = if ('\u{3041}'..='\u{3096}').contains(&c) {
+            char::from_u32(c as u32 + 0x60).unwrap_or(c)
+        } else {
+            c
+        };
+        match k {
+            'ァ' => 'ア', 'ィ' => 'イ', 'ゥ' => 'ウ', 'ェ' => 'エ', 'ォ' => 'オ',
+            'ャ' => 'ヤ', 'ュ' => 'ユ', 'ョ' => 'ヨ', 'ッ' => 'ツ',
+            'ヮ' => 'ワ', 'ヵ' => 'カ', 'ヶ' => 'ケ',
+            _ => k,
+        }
+    }).collect()
+}
+
 /// OCR テキスト内に候補文字が何割含まれるかを返す（文字 recall）。
-/// 同一文字の重複は消費ベースで正確にカウントする。
+/// 同一文字の重複は消費ベースで正確にカウントする。カナ正規化済み。
 fn char_recall(candidate: &str, ocr: &str) -> f32 {
     if candidate.is_empty() { return 0.0; }
-    let mut pool: Vec<char> = ocr.chars().collect();
-    let matched = candidate.chars().filter(|c| {
+    let norm_cand = normalize_kana(candidate);
+    let norm_ocr  = normalize_kana(ocr);
+    let mut pool: Vec<char> = norm_ocr.chars().collect();
+    let matched = norm_cand.chars().filter(|c| {
         if let Some(pos) = pool.iter().position(|x| x == c) {
             pool.remove(pos);
             true
@@ -225,7 +244,7 @@ fn char_recall(candidate: &str, ocr: &str) -> f32 {
             false
         }
     }).count();
-    matched as f32 / candidate.chars().count() as f32
+    matched as f32 / norm_cand.chars().count() as f32
 }
 
 /// 候補リストから OCR テキストへの char_recall が最大で閾値以上の候補を返す。
@@ -257,7 +276,7 @@ pub fn normalize_rule(raw: &str) -> Option<String> {
     if let Some(m) = fuzzy_best_match(raw.trim(), &rule_names, 0.30) {
         return Some(m.to_string());
     }
-    if raw.trim().is_empty() { None } else { Some(raw.trim().to_string()) }
+    None
 }
 
 pub fn normalize_stage(raw: &str) -> Option<String> {
@@ -286,13 +305,16 @@ pub fn normalize_stage(raw: &str) -> Option<String> {
 pub fn normalize_mode(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() { return None; }
-    // ModeText BBox がルール領域を誤検知した場合を除外
-    let rule_patterns = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
-                         "AREA", "TOWER", "RAINMAKER", "CLAM"];
+    // ModeText BBox がルール領域を誤検知した場合を除外（完全一致 + ファジー）
+    let rule_names_exact = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
+                             "AREA", "TOWER", "RAINMAKER", "CLAM"];
     let upper_raw = raw.to_uppercase();
-    for r in &rule_patterns {
+    for r in &rule_names_exact {
         if upper_raw.contains(&r.to_uppercase()) { return None; }
     }
+    let rule_names_fuzzy = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
+    if fuzzy_best_match(trimmed, &rule_names_fuzzy, 0.35).is_some() { return None; }
+
     let candidates: &[(&str, &[&str])] = &[
         ("Xマッチ",                   &["Xマッチ", "X BATTLE", "Xバトル", "X MATCH"]),
         ("バンカラマッチ(チャレンジ)", &["チャレンジ", "CHALLENGE", "ANARCHY OPEN"]),
@@ -308,7 +330,7 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
             }
         }
     }
-    Some(trimmed.to_string())
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +446,25 @@ mod tests {
         // ガチヤグラ に対する "ヤグ" の recall
         let score2 = char_recall("ガチヤグラ", "ヤグ");
         assert!(score2 >= 0.30, "recall={score2}");
+        // 小書きカタカナ正規化: "多ャグう" は "多ヤグウ" に正規化され recall≥0.35
+        let score3 = char_recall("ガチヤグラ", "多ャグう");
+        assert!(score3 >= 0.35, "recall={score3}");
+    }
+
+    #[test]
+    fn test_normalize_mode_garbled() {
+        // OCR 文字化けでもルール文字列として除外される
+        assert_eq!(normalize_mode("多ャグう"), None);
+        // 完全にランダムなゴミは None
+        assert_eq!(normalize_mode("zzzz"), None);
+    }
+
+    #[test]
+    fn test_normalize_rule_garbled() {
+        // OCR 文字化けで全くマッチしない場合は None
+        assert_eq!(normalize_rule("多ャワう"), None);
+        // 小書きカタカナ: ャグ→ヤグ で ガチヤグラ にマッチ
+        assert_eq!(normalize_rule("多ャグう"), Some("ガチヤグラ".to_string()));
     }
 
     #[test]
