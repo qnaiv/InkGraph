@@ -45,8 +45,8 @@ pub const STATS_CLASS_NAMES: &[&str] = &[
     "digit_8",
     "digit_9",
     "icon_death",
+    "icon_kill",
     "icon_special",
-    "icon_weapon",
 ];
 
 // ---------------------------------------------------------------------------
@@ -130,22 +130,25 @@ impl StatsDetector {
 // ---------------------------------------------------------------------------
 
 /// ソート済み検出結果からアンカーを特定し、4グループにパースする。
+///
+/// 画面レイアウト（クロップ内、左→右）:
+///   [塗りP数]  icon_kill  [K数]  icon_death  [D数]  icon_special  [SP数]
 pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
-    let weapon_x  = icon_x(dets, "icon_weapon");
+    let kill_x    = icon_x(dets, "icon_kill");
     let death_x   = icon_x(dets, "icon_death");
     let special_x = icon_x(dets, "icon_special");
 
     log::debug!(
-        "[cascade] anchors: weapon={:?} death={:?} special={:?}",
-        weapon_x, death_x, special_x
+        "[cascade] anchors: kill={:?} death={:?} special={:?}",
+        kill_x, death_x, special_x
     );
 
     let m = ANCHOR_MARGIN;
 
     // 各グループの x 範囲: (lo 排他, hi 排他), None = 境界なし
-    let paint_digits   = collect_digits(dets, None,                    weapon_x.map(|x| x - m));
-    let kill_digits    = collect_digits(dets, weapon_x.map(|x| x + m), death_x.map(|x| x - m));
-    let death_digits   = collect_digits(dets, death_x.map(|x| x + m),  special_x.map(|x| x - m));
+    let paint_digits   = collect_digits(dets, None,                   kill_x.map(|x| x - m));
+    let kill_digits    = collect_digits(dets, kill_x.map(|x| x + m),  death_x.map(|x| x - m));
+    let death_digits   = collect_digits(dets, death_x.map(|x| x + m), special_x.map(|x| x - m));
     let special_digits = collect_digits(dets, special_x.map(|x| x + m), None);
 
     log::debug!(
@@ -268,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_digit_value_icon() {
-        assert_eq!(digit_value("icon_weapon"),  None);
+        assert_eq!(digit_value("icon_kill"),  None);
         assert_eq!(digit_value("icon_death"),   None);
         assert_eq!(digit_value("icon_special"), None);
     }
@@ -295,7 +298,7 @@ mod tests {
         assert!(stats.special.is_none());
     }
 
-    /// icon_weapon=0.30, icon_death=0.50, icon_special=0.70
+    /// icon_kill=0.30, icon_death=0.50, icon_special=0.70
     /// paint: 0.10,0.15 → [1,5] = 15
     /// kill:  0.35,0.40 → [3,0] = 30
     /// death: 0.55      → [2]   = 2
@@ -305,7 +308,7 @@ mod tests {
         let mut dets = vec![
             make_det("digit_1",    0.10, 0.9),
             make_det("digit_5",    0.15, 0.9),
-            make_det("icon_weapon",0.30, 0.9),
+            make_det("icon_kill",0.30, 0.9),
             make_det("digit_3",    0.35, 0.9),
             make_det("digit_0",    0.40, 0.9),
             make_det("icon_death", 0.50, 0.9),
@@ -329,12 +332,12 @@ mod tests {
     /// マージン内の数字は隣のグループに「漏れない」ことを確認
     #[test]
     fn test_cluster_margin_boundary() {
-        // icon_weapon x=0.30 → margin=0.02
+        // icon_kill x=0.30 → margin=0.02
         // 0.279 < 0.30 - 0.02 = 0.28 → paint グループ (境界外)
         // 0.281 > 0.28 だが < 0.30 + 0.02 = 0.32 → どちらのグループにも入らない
         let mut dets = vec![
             make_det("digit_9",     0.10, 0.9), // paint
-            make_det("icon_weapon", 0.30, 0.9),
+            make_det("icon_kill", 0.30, 0.9),
             make_det("digit_1",     0.281, 0.9), // margin 内 → 捨てられる
             make_det("icon_death",  0.50, 0.9),
             make_det("icon_special",0.70, 0.9),
