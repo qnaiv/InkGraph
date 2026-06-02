@@ -166,7 +166,7 @@ pub fn upscale_2x(bgra: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
     let new_h = height * 2;
     let rgba_img = bgra_to_rgba_image(bgra, width, height);
     let resized  = image::imageops::resize(
-        &rgba_img, new_w, new_h, image::imageops::FilterType::Bilinear,
+        &rgba_img, new_w, new_h, image::imageops::FilterType::Triangle,
     );
     let bgra_out: Vec<u8> = resized.into_raw()
         .chunks_exact(4)
