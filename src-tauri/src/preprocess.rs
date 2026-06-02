@@ -156,8 +156,23 @@ pub fn extract_white_text(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
         out[base + 2] = val; // R
         out[base + 3] = 255; // A
     }
-    let _ = (width, height); // 将来の拡張用
     out
+}
+
+/// BGRA8 バッファを双線形補間で 2 倍にアップスケールして返す。
+/// WinRT OCR は低解像度テキストへの精度が低いため、小クロップ領域に適用する。
+pub fn upscale_2x(bgra: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    let new_w = width * 2;
+    let new_h = height * 2;
+    let rgba_img = bgra_to_rgba_image(bgra, width, height);
+    let resized  = image::imageops::resize(
+        &rgba_img, new_w, new_h, image::imageops::FilterType::Bilinear,
+    );
+    let bgra_out: Vec<u8> = resized.into_raw()
+        .chunks_exact(4)
+        .flat_map(|c| [c[2], c[1], c[0], c[3]])
+        .collect();
+    (bgra_out, new_w, new_h)
 }
 
 /// グレースケール変換後に Otsu の二値化を適用した BGRA8 バッファを返す。

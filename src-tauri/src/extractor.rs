@@ -14,7 +14,7 @@ use crate::{
     capture::CapturedFrame,
     detector::{crop_bgra, Detection, YoloClass, YoloDetector, Roi},
     ocr::{ocr_from_bgra, preprocess_bgra},
-    preprocess::extract_white_text,
+    preprocess::{extract_white_text, upscale_2x},
     types::{ExtractedMatchData, OcrDebugField, OcrDebugResult},
 };
 use anyhow::Result;
@@ -83,7 +83,8 @@ fn extract_ocr_from_class(
 
     let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
     let preprocessed = extract_white_text(&cropped, w, h);
-    let text = ocr_from_bgra(&preprocessed, w, h, Some(lang)).ok()?.text;
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    let text = ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()?.text;
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() { None } else { Some(trimmed) }
 }
@@ -196,8 +197,10 @@ pub fn extract_stage_raw(frame: &CapturedFrame) -> String {
 
 fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Option<i64> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let text = ocr_from_bgra(&cropped, w, h, Some(lang)).ok()?.text;
+    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let preprocessed = extract_white_text(&cropped, w, h);
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    let text = ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()?.text;
     clean_numeric_text(&text).parse::<i64>().ok()
 }
 
@@ -208,6 +211,31 @@ fn clean_numeric_text(text: &str) -> String {
 // ---------------------------------------------------------------------------
 // 正規化
 // ---------------------------------------------------------------------------
+
+/// OCR テキスト内に候補文字が何割含まれるかを返す（文字 recall）。
+/// 同一文字の重複は消費ベースで正確にカウントする。
+fn char_recall(candidate: &str, ocr: &str) -> f32 {
+    if candidate.is_empty() { return 0.0; }
+    let mut pool: Vec<char> = ocr.chars().collect();
+    let matched = candidate.chars().filter(|c| {
+        if let Some(pos) = pool.iter().position(|x| x == c) {
+            pool.remove(pos);
+            true
+        } else {
+            false
+        }
+    }).count();
+    matched as f32 / candidate.chars().count() as f32
+}
+
+/// 候補リストから OCR テキストへの char_recall が最大で閾値以上の候補を返す。
+fn fuzzy_best_match<'a>(raw: &str, candidates: &[&'a str], threshold: f32) -> Option<&'a str> {
+    candidates.iter()
+        .map(|&c| (c, char_recall(c, raw)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .filter(|(_, s)| *s >= threshold)
+        .map(|(c, _)| c)
+}
 
 pub fn normalize_rule(raw: &str) -> Option<String> {
     let candidates: &[(&str, &[&str])] = &[
@@ -224,33 +252,47 @@ pub fn normalize_rule(raw: &str) -> Option<String> {
             }
         }
     }
+    // エイリアス一致失敗時のファジーフォールバック
+    let rule_names = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
+    if let Some(m) = fuzzy_best_match(raw.trim(), &rule_names, 0.30) {
+        return Some(m.to_string());
+    }
     if raw.trim().is_empty() { None } else { Some(raw.trim().to_string()) }
 }
 
 pub fn normalize_stage(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() { return None; }
-    let stages = [
+    const STAGES: &[&str] = &[
         "ユノハナ大渓谷", "ゴンズイ地区", "ヤガラ市場", "マテガイ放水路",
         "ナメロウ金属", "ナンプラー遺跡", "クサヤ温泉", "ヒラメが丘団地",
         "マサバ海峡大橋", "スメーシーワールド", "キンメダイ美術館",
         "タラポートショッピングパーク", "バイガイ亭", "海女美術大学",
         "チョウザメ造船", "ザトウマーケット", "リュウグウターミナル",
         "オヒョウ海運", "カジキ空港", "バンカラ街", "冷凍倉庫",
-        "ネギトロ炭鉱", "ショッツル鉱山",
+        "ネギトロ炭鉱", "ショッツル鉱山", "デカライン高架下",
     ];
-    for stage in &stages {
-        if trimmed.contains(stage) { return Some(stage.to_string()); }
-        if trimmed.chars().count() >= 4 && stage.contains(trimmed) {
-            return Some(stage.to_string());
+    // 完全一致（高速パス）
+    for s in STAGES {
+        if trimmed.contains(s) { return Some(s.to_string()); }
+        if trimmed.chars().count() >= 4 && s.contains(trimmed) {
+            return Some(s.to_string());
         }
     }
-    None
+    // ファジーフォールバック（OCR 文字化け対応）
+    fuzzy_best_match(trimmed, STAGES, 0.35).map(|s| s.to_string())
 }
 
 pub fn normalize_mode(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() { return None; }
+    // ModeText BBox がルール領域を誤検知した場合を除外
+    let rule_patterns = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
+                         "AREA", "TOWER", "RAINMAKER", "CLAM"];
+    let upper_raw = raw.to_uppercase();
+    for r in &rule_patterns {
+        if upper_raw.contains(&r.to_uppercase()) { return None; }
+    }
     let candidates: &[(&str, &[&str])] = &[
         ("Xマッチ",                   &["Xマッチ", "X BATTLE", "Xバトル", "X MATCH"]),
         ("バンカラマッチ(チャレンジ)", &["チャレンジ", "CHALLENGE", "ANARCHY OPEN"]),
@@ -314,7 +356,8 @@ fn bbox_to_raw_text(frame: &CapturedFrame, detections: &[Detection], class: Yolo
     let h  = y2.saturating_sub(y1).max(1);
     let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
     let preprocessed = extract_white_text(&cropped, w, h);
-    ocr_from_bgra(&preprocessed, w, h, Some(lang)).ok()
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
         .map(|r| r.text.trim().to_string())
         .unwrap_or_default()
 }
@@ -322,8 +365,10 @@ fn bbox_to_raw_text(frame: &CapturedFrame, detections: &[Detection], class: Yolo
 /// ROI → OCR 生テキスト (前処理なし、数値用)。
 fn roi_to_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> String {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    ocr_from_bgra(&cropped, w, h, Some(lang)).ok()
+    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let preprocessed = extract_white_text(&cropped, w, h);
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
         .map(|r| r.text.trim().to_string())
         .unwrap_or_default()
 }
@@ -343,6 +388,8 @@ mod tests {
         assert_eq!(normalize_rule("AREA"),       Some("ガチエリア".to_string()));
         assert_eq!(normalize_rule("ガチヤグラ"), Some("ガチヤグラ".to_string()));
         assert_eq!(normalize_rule("RAINMAKER"),  Some("ガチホコ".to_string()));
+        // ファジーマッチ: OCR 文字化け対応
+        assert_eq!(normalize_rule("ヤグ"),       Some("ガチヤグラ".to_string()));
     }
 
     #[test]
@@ -350,6 +397,9 @@ mod tests {
         assert_eq!(normalize_stage("マテガイ放水路"), Some("マテガイ放水路".to_string()));
         assert_eq!(normalize_stage("ナメロウ金属"),   Some("ナメロウ金属".to_string()));
         assert_eq!(normalize_stage(""),               None);
+        // ファジーマッチ: OCR 文字化け対応
+        assert_eq!(normalize_stage("リュウグウラ - ミカ↓"), Some("リュウグウターミナル".to_string()));
+        assert_eq!(normalize_stage("デカライン高架下"),      Some("デカライン高架下".to_string()));
     }
 
     #[test]
@@ -361,6 +411,19 @@ mod tests {
         assert_eq!(normalize_mode("ナワバリ"),       Some("ナワバリバトル".to_string()));
         assert_eq!(normalize_mode("TURF WAR"),       Some("ナワバリバトル".to_string()));
         assert_eq!(normalize_mode(""),               None);
+        // ModeText がルール名を読んだ場合は None（YOLO 誤検知）
+        assert_eq!(normalize_mode("多ャグラ"),       None);
+        assert_eq!(normalize_mode("ガチヤグラ"),     None);
+    }
+
+    #[test]
+    fn test_char_recall() {
+        // リュウグウターミナル に対する "リュウグウラ - ミカ↓" の recall
+        let score = char_recall("リュウグウターミナル", "リュウグウラ - ミカ↓");
+        assert!(score >= 0.35, "recall={score}");
+        // ガチヤグラ に対する "ヤグ" の recall
+        let score2 = char_recall("ガチヤグラ", "ヤグ");
+        assert!(score2 >= 0.30, "recall={score2}");
     }
 
     #[test]

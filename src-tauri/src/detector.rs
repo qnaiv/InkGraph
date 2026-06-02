@@ -682,7 +682,7 @@ pub struct Detection {
 const YOLO_INPUT_SIZE: u32 = 640;
 
 /// 確信度の下限。これ未満の検出はノイズとして破棄する
-const DEFAULT_CONF_THRESHOLD: f32 = 0.60;
+const DEFAULT_CONF_THRESHOLD: f32 = 0.50;
 
 /// NMS の IoU 閾値
 const DEFAULT_IOU_THRESHOLD: f32 = 0.45;
