@@ -1,0 +1,351 @@
+/// InkGraph — カスケード（2段階）YOLO 推論モジュール
+///
+/// Step 1: Model 1 の MyArrow BBox を元に画像をクロップ
+/// Step 2: Model 2 でクロップ画像内の数字・アイコンを検出
+/// Step 3: 検出結果を x_center 昇順にソート
+/// Step 4: アイコン座標を基準点として数字を4グループに振り分け、整数値にパース
+
+use crate::{
+    capture::CapturedFrame,
+    detector::{crop_bgra, Detection, YoloDetector},
+};
+use anyhow::Result;
+use std::{cmp::Ordering, path::PathBuf};
+
+// ---------------------------------------------------------------------------
+// 定数
+// ---------------------------------------------------------------------------
+
+/// MyArrow y_center の上下に確保するクロップ幅 (px)
+const CROP_HALF_H: u32 = 50;
+
+/// スタッツ領域の開始位置 (画面幅に対する比率)
+/// 塗りポイント〜SP カラムはすべてこの位置より右にある
+const STATS_X_START: f32 = 0.45;
+
+/// アイコン x_center に対するマージン (比率)。
+/// アンカー座標の微小なブレを吸収する。
+const ANCHOR_MARGIN: f32 = 0.02;
+
+// ---------------------------------------------------------------------------
+// Model 2 クラス名
+// ---------------------------------------------------------------------------
+
+/// Model 2 のクラス名一覧。
+/// Roboflow の data.yaml アルファベット順と一致させること。
+pub const STATS_CLASS_NAMES: &[&str] = &[
+    "digit_0",
+    "digit_1",
+    "digit_2",
+    "digit_3",
+    "digit_4",
+    "digit_5",
+    "digit_6",
+    "digit_7",
+    "digit_8",
+    "digit_9",
+    "icon_death",
+    "icon_special",
+    "icon_weapon",
+];
+
+// ---------------------------------------------------------------------------
+// 出力型
+// ---------------------------------------------------------------------------
+
+/// カスケード推論で得られた1プレイヤー分のスタッツ
+#[derive(Debug, Clone)]
+pub struct PlayerStats {
+    pub paint:   Option<i64>,
+    pub kill:    Option<i64>,
+    pub death:   Option<i64>,
+    pub special: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// StatsDetector
+// ---------------------------------------------------------------------------
+
+/// Model 2 (yolo_stats.onnx) を保持し、カスケード推論を実行する。
+pub struct StatsDetector {
+    yolo: YoloDetector,
+}
+
+impl StatsDetector {
+    pub fn new(model_path: impl Into<PathBuf>) -> Self {
+        let class_names: Vec<String> =
+            STATS_CLASS_NAMES.iter().map(|s| s.to_string()).collect();
+        Self {
+            yolo: YoloDetector::new_with_classes(model_path, class_names),
+        }
+    }
+
+    pub fn load(&mut self) -> Result<()> {
+        self.yolo.load()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.yolo.is_loaded()
+    }
+
+    /// Steps 1〜4 を実行して PlayerStats を返す。
+    ///
+    /// `arrow`: Model 1 が検出した MyArrow Detection。
+    pub fn run_cascade(
+        &mut self,
+        frame: &CapturedFrame,
+        arrow: &Detection,
+    ) -> Result<PlayerStats> {
+        // Step 1: MyArrow y_center ±CROP_HALF_H px、x ≥ STATS_X_START でクロップ
+        let y_px =
+            ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame.height as f32) as u32;
+        let crop_y = y_px.saturating_sub(CROP_HALF_H);
+        let crop_h = (CROP_HALF_H * 2).min(frame.height.saturating_sub(crop_y));
+        let crop_x = (frame.width as f32 * STATS_X_START) as u32;
+        let crop_w = frame.width.saturating_sub(crop_x);
+
+        let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
+
+        // Step 2: Model 2 推論
+        let mut dets = self.yolo.detect_bgra(&cropped, crop_w, crop_h)?;
+
+        log::debug!(
+            "[cascade] crop=({crop_x},{crop_y},{crop_w}x{crop_h}), detections={}",
+            dets.len()
+        );
+
+        // Step 3: x_center 昇順ソート
+        dets.sort_by(|a, b| {
+            let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
+            cx(a).partial_cmp(&cx(b)).unwrap_or(Ordering::Equal)
+        });
+
+        // Steps 3–4: アンカー特定 → クラスタリング → パース
+        Ok(cluster_and_parse(&dets))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// クラスタリング・パース（純粋関数 — 単体テスト可）
+// ---------------------------------------------------------------------------
+
+/// ソート済み検出結果からアンカーを特定し、4グループにパースする。
+pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
+    let weapon_x  = icon_x(dets, "icon_weapon");
+    let death_x   = icon_x(dets, "icon_death");
+    let special_x = icon_x(dets, "icon_special");
+
+    log::debug!(
+        "[cascade] anchors: weapon={:?} death={:?} special={:?}",
+        weapon_x, death_x, special_x
+    );
+
+    let m = ANCHOR_MARGIN;
+
+    // 各グループの x 範囲: (lo 排他, hi 排他), None = 境界なし
+    let paint_digits   = collect_digits(dets, None,                    weapon_x.map(|x| x - m));
+    let kill_digits    = collect_digits(dets, weapon_x.map(|x| x + m), death_x.map(|x| x - m));
+    let death_digits   = collect_digits(dets, death_x.map(|x| x + m),  special_x.map(|x| x - m));
+    let special_digits = collect_digits(dets, special_x.map(|x| x + m), None);
+
+    log::debug!(
+        "[cascade] paint={:?} kill={:?} death={:?} sp={:?}",
+        paint_digits, kill_digits, death_digits, special_digits
+    );
+
+    PlayerStats {
+        paint:   digits_to_int(&paint_digits),
+        kill:    digits_to_int(&kill_digits),
+        death:   digits_to_int(&death_digits),
+        special: digits_to_int(&special_digits),
+    }
+}
+
+/// 指定クラス名のアイコン x_center を返す。複数検出時は最高確信度を優先。
+fn icon_x(dets: &[Detection], name: &str) -> Option<f32> {
+    dets.iter()
+        .filter(|d| d.class_name == name)
+        .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
+        .map(|d| (d.bbox.x1 + d.bbox.x2) / 2.0)
+}
+
+/// `lo < x_center < hi` の範囲に入る数字クラスを左から順に収集する。
+/// dets はすでに x_center 昇順にソート済みであること。
+fn collect_digits(
+    dets: &[Detection],
+    lo:   Option<f32>,
+    hi:   Option<f32>,
+) -> Vec<u8> {
+    dets.iter()
+        .filter_map(|d| {
+            let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
+            let in_lo = lo.map_or(true, |l| cx > l);
+            let in_hi = hi.map_or(true, |h| cx < h);
+            if in_lo && in_hi {
+                digit_value(&d.class_name)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `"digit_N"` クラス名から数字値を取り出す。
+fn digit_value(class_name: &str) -> Option<u8> {
+    class_name.strip_prefix("digit_")?.parse().ok()
+}
+
+/// 数字スライスを左から結合して i64 にパースする。空なら None。
+fn digits_to_int(digits: &[u8]) -> Option<i64> {
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().fold(Some(0i64), |acc, &d| {
+        acc?.checked_mul(10)?.checked_add(d as i64)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// テスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::detector::BBox;
+
+    fn make_det(class_name: &str, cx: f32, conf: f32) -> Detection {
+        Detection {
+            bbox: BBox {
+                x1: cx - 0.01,
+                y1: 0.3,
+                x2: cx + 0.01,
+                y2: 0.7,
+            },
+            class_id: 0,
+            class_name: class_name.to_string(),
+            confidence: conf,
+        }
+    }
+
+    // ---------- digits_to_int ----------
+
+    #[test]
+    fn test_digits_empty() {
+        assert_eq!(digits_to_int(&[]), None);
+    }
+
+    #[test]
+    fn test_digits_single() {
+        assert_eq!(digits_to_int(&[7]), Some(7));
+    }
+
+    #[test]
+    fn test_digits_multi() {
+        assert_eq!(digits_to_int(&[1, 3, 4, 1]), Some(1341));
+    }
+
+    #[test]
+    fn test_digits_zero_padded() {
+        assert_eq!(digits_to_int(&[0, 5]), Some(5));
+    }
+
+    #[test]
+    fn test_digits_overflow() {
+        // i64 の桁数を超える場合は None
+        let many_nines: Vec<u8> = vec![9; 20];
+        assert_eq!(digits_to_int(&many_nines), None);
+    }
+
+    // ---------- digit_value ----------
+
+    #[test]
+    fn test_digit_value_all() {
+        for i in 0u8..=9 {
+            assert_eq!(digit_value(&format!("digit_{i}")), Some(i));
+        }
+    }
+
+    #[test]
+    fn test_digit_value_icon() {
+        assert_eq!(digit_value("icon_weapon"),  None);
+        assert_eq!(digit_value("icon_death"),   None);
+        assert_eq!(digit_value("icon_special"), None);
+    }
+
+    // ---------- cluster_and_parse ----------
+
+    #[test]
+    fn test_cluster_no_detections() {
+        let stats = cluster_and_parse(&[]);
+        assert!(stats.paint.is_none());
+        assert!(stats.kill.is_none());
+        assert!(stats.death.is_none());
+        assert!(stats.special.is_none());
+    }
+
+    #[test]
+    fn test_cluster_no_anchors() {
+        // 数字のみでアンカーなし → 全フィールド None
+        let dets = vec![make_det("digit_3", 0.5, 0.9)];
+        let stats = cluster_and_parse(&dets);
+        assert!(stats.paint.is_none());
+        assert!(stats.kill.is_none());
+        assert!(stats.death.is_none());
+        assert!(stats.special.is_none());
+    }
+
+    /// icon_weapon=0.30, icon_death=0.50, icon_special=0.70
+    /// paint: 0.10,0.15 → [1,5] = 15
+    /// kill:  0.35,0.40 → [3,0] = 30
+    /// death: 0.55      → [2]   = 2
+    /// sp:    0.80,0.85 → [1,2] = 12
+    #[test]
+    fn test_cluster_clean() {
+        let mut dets = vec![
+            make_det("digit_1",    0.10, 0.9),
+            make_det("digit_5",    0.15, 0.9),
+            make_det("icon_weapon",0.30, 0.9),
+            make_det("digit_3",    0.35, 0.9),
+            make_det("digit_0",    0.40, 0.9),
+            make_det("icon_death", 0.50, 0.9),
+            make_det("digit_2",    0.55, 0.9),
+            make_det("icon_special",0.70, 0.9),
+            make_det("digit_1",    0.80, 0.9),
+            make_det("digit_2",    0.85, 0.9),
+        ];
+        dets.sort_by(|a, b| {
+            let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
+            cx(a).partial_cmp(&cx(b)).unwrap_or(Ordering::Equal)
+        });
+
+        let stats = cluster_and_parse(&dets);
+        assert_eq!(stats.paint,   Some(15));
+        assert_eq!(stats.kill,    Some(30));
+        assert_eq!(stats.death,   Some(2));
+        assert_eq!(stats.special, Some(12));
+    }
+
+    /// マージン内の数字は隣のグループに「漏れない」ことを確認
+    #[test]
+    fn test_cluster_margin_boundary() {
+        // icon_weapon x=0.30 → margin=0.02
+        // 0.279 < 0.30 - 0.02 = 0.28 → paint グループ (境界外)
+        // 0.281 > 0.28 だが < 0.30 + 0.02 = 0.32 → どちらのグループにも入らない
+        let mut dets = vec![
+            make_det("digit_9",     0.10, 0.9), // paint
+            make_det("icon_weapon", 0.30, 0.9),
+            make_det("digit_1",     0.281, 0.9), // margin 内 → 捨てられる
+            make_det("icon_death",  0.50, 0.9),
+            make_det("icon_special",0.70, 0.9),
+        ];
+        dets.sort_by(|a, b| {
+            let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
+            cx(a).partial_cmp(&cx(b)).unwrap_or(Ordering::Equal)
+        });
+
+        let stats = cluster_and_parse(&dets);
+        assert_eq!(stats.paint, Some(9));  // digit_9 のみ
+        assert_eq!(stats.kill,  None);     // margin 内の digit_1 は捨てられる
+    }
+}

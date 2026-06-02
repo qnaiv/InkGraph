@@ -692,6 +692,9 @@ pub struct YoloDetector {
     model_path:     PathBuf,
     conf_threshold: f32,
     iou_threshold:  f32,
+    /// カスタムクラス名リスト。Some の場合は class_id インデックスで参照する。
+    /// None の場合は YoloClass enum で解決する（Model 1 デフォルト）。
+    class_names:    Option<Vec<String>>,
 }
 
 impl YoloDetector {
@@ -702,10 +705,32 @@ impl YoloDetector {
             model_path:     model_path.into(),
             conf_threshold: DEFAULT_CONF_THRESHOLD,
             iou_threshold:  DEFAULT_IOU_THRESHOLD,
+            class_names:    None,
+        }
+    }
+
+    /// カスタムクラス名リストを持つバリアント（Model 2 / カスケード用）。
+    pub fn new_with_classes(model_path: impl Into<PathBuf>, class_names: Vec<String>) -> Self {
+        Self {
+            session:        None,
+            model_path:     model_path.into(),
+            conf_threshold: DEFAULT_CONF_THRESHOLD,
+            iou_threshold:  DEFAULT_IOU_THRESHOLD,
+            class_names:    Some(class_names),
         }
     }
 
     pub fn is_loaded(&self) -> bool { self.session.is_some() }
+
+    /// クロップ済み BGRA バッファを直接受け取る推論メソッド（カスケード用）。
+    pub fn detect_bgra(&mut self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<Detection>> {
+        let frame = crate::capture::CapturedFrame {
+            bgra: bgra.to_vec(),
+            width,
+            height,
+        };
+        self.detect(&frame)
+    }
 
     /// デバッグ用: 閾値 0.10 で検出して全候補を返す。
     /// 通常の閾値 (0.70) では捨てられる低確信度候補も含めることで
@@ -819,11 +844,18 @@ impl YoloDetector {
             // 座標を元フレームの正規化座標へ変換
             let (x1, y1, x2, y2) = params.to_normalized(cx, cy, bw, bh);
 
+            let class_name = match &self.class_names {
+                Some(names) => names
+                    .get(max_class)
+                    .cloned()
+                    .unwrap_or_else(|| format!("class_{max_class}")),
+                None => format!("{:?}", YoloClass::from_id(max_class)
+                    .unwrap_or(YoloClass::BattleStart)),
+            };
             raw_detections.push(Detection {
                 bbox: BBox { x1, y1, x2, y2 },
                 class_id:   max_class,
-                class_name: format!("{:?}", YoloClass::from_id(max_class)
-                    .unwrap_or(YoloClass::BattleStart)),
+                class_name,
                 confidence: max_conf,
             });
         }

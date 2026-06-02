@@ -23,6 +23,7 @@ pub fn new_in_progress_match() -> Match {
         kill_count: None,
         death_count: None,
         special_count: None,
+        paint_count: None,
         xp_after: None,
         gold_award_count: None,
         tags: Some("[]".to_string()),
@@ -42,6 +43,7 @@ pub fn new_match_from_ocr(
     kill_count: Option<i64>,
     death_count: Option<i64>,
     special_count: Option<i64>,
+    paint_count: Option<i64>,
     xp_after: Option<f64>,
     rule: Option<String>,
     stage: Option<String>,
@@ -59,6 +61,7 @@ pub fn new_match_from_ocr(
         kill_count,
         death_count,
         special_count,
+        paint_count,
         xp_after,
         gold_award_count,
         tags: Some("[]".to_string()),
@@ -83,17 +86,19 @@ mod tests {
     #[test]
     fn test_new_match_reuses_id() {
         let id = "existing-id".to_string();
-        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(2341.5), None, None, Some("Xマッチ".to_string()), None);
+        let m = new_match_from_ocr(Some(id.clone()), "win", Some(5), Some(1), Some(2), Some(1500), Some(2341.5), None, None, Some("Xマッチ".to_string()), None);
         assert_eq!(m.id, id);
         assert_eq!(m.result, "win");
         assert_eq!(m.mode.as_deref(), Some("Xマッチ"));
+        assert_eq!(m.paint_count, Some(1500));
     }
 
     #[test]
     fn test_new_match_generates_id_when_none() {
-        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None, None, None);
+        let m = new_match_from_ocr(None, "lose", None, None, None, None, None, None, None, None, None);
         assert!(!m.id.is_empty());
         assert_eq!(m.result, "lose");
         assert!(m.mode.is_none());
+        assert!(m.paint_count.is_none());
     }
 }

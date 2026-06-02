@@ -26,12 +26,14 @@ use anyhow::Result;
 /// YOLO の検出結果を使ってリザルト画面から全データを抽出する。
 ///
 /// `result`: capture_loop が MyPlayerRow の y 座標から判定した "win" / "lose" 文字列。
+/// `stats_override`: カスケード推論 (Model 2) で取得したスタッツ。Some の場合は OCR 抽出を上書きする。
 /// BBox が検出されなかった項目は `None` を返す (OCR 失敗扱い)。
 /// 呼び出し元は `tokio::task::block_in_place` でラップすること (OCR がブロッキング)。
 pub fn extract_from_yolo_detections(
-    frame:      &CapturedFrame,
-    detections: &[Detection],
-    result:     &str,           // "win" | "lose"  (capture_loop 側で判定済み)
+    frame:          &CapturedFrame,
+    detections:     &[Detection],
+    result:         &str,                                  // "win" | "lose"
+    stats_override: Option<crate::cascade::PlayerStats>,  // カスケード結果
 ) -> Result<ExtractedMatchData> {
     // ルール・ステージ・モード: BBox クロップ → 白文字抽出 → OCR → 正規化
     let rule  = extract_ocr_from_class(frame, detections, YoloClass::RuleText,  "ja-JP")
@@ -41,11 +43,17 @@ pub fn extract_from_yolo_detections(
     let mode  = extract_ocr_from_class(frame, detections, YoloClass::ModeText,  "ja-JP")
         .and_then(|t| normalize_mode(&t));
 
-    // KDA: MyArrow BBox の y 中心 → 固定列位置でクロップ → OCR
-    let kda_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
-        .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
-        .unwrap_or(0.5);
-    let (kill_count, death_count, special_count) = extract_kda(frame, kda_y)?;
+    // KDA + 塗りポイント: カスケード結果があればそちらを優先、なければ固定列 OCR にフォールバック
+    let (kill_count, death_count, special_count, paint_count) =
+        if let Some(s) = stats_override {
+            (s.kill, s.death, s.special, s.paint)
+        } else {
+            let kda_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
+                .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0)
+                .unwrap_or(0.5);
+            let (k, d, sp) = extract_kda(frame, kda_y)?;
+            (k, d, sp, None)
+        };
 
     // GoldAward: 検出された BBox の数 = 取得した金表彰の枚数
     let gold_award_count = detections.iter()
@@ -58,6 +66,7 @@ pub fn extract_from_yolo_detections(
         kill_count,
         death_count,
         special_count,
+        paint_count,
         xp_after: None, // フェーズ2 (Xパワー画面) で実装
         rule,
         stage,
@@ -121,6 +130,7 @@ pub fn extract_match_data(
         kill_count,
         death_count,
         special_count,
+        paint_count: None, // 固定 ROI パスでは塗りポイント取得なし
         xp_after,
         rule,
         stage,

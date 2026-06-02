@@ -11,6 +11,7 @@ export interface Match {
   kill_count: number | null;
   death_count: number | null;
   special_count: number | null;
+  paint_count: number | null;
   xp_after: number | null;
   gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う
