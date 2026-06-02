@@ -133,9 +133,11 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                     let win_conf  = YoloDetector::best_detection(&dets, YoloClass::Win).map(|d| d.confidence).unwrap_or(0.0);
                     let lose_conf = YoloDetector::best_detection(&dets, YoloClass::Lose).map(|d| d.confidence).unwrap_or(0.0);
                     let draw_conf = YoloDetector::best_detection(&dets, YoloClass::Draw).map(|d| d.confidence).unwrap_or(0.0);
-                    let is_result_screen = win_conf >= 0.30 || lose_conf >= 0.30;
+                    let arrow_conf = YoloDetector::best_detection(&dets, YoloClass::MyArrow).map(|d| d.confidence).unwrap_or(0.0);
+                    // Win/Lose バナー未検知でも MyArrow が見えていればリザルト画面とみなす
+                    let is_result_screen = win_conf >= 0.30 || lose_conf >= 0.30 || arrow_conf >= 0.40;
                     log::debug!(
-                        "[capture_loop] result candidates: win={win_conf:.2} lose={lose_conf:.2} draw={draw_conf:.2} result_screen={is_result_screen}"
+                        "[capture_loop] result candidates: win={win_conf:.2} lose={lose_conf:.2} draw={draw_conf:.2} arrow={arrow_conf:.2} result_screen={is_result_screen}"
                     );
                     let result_opt = if draw_conf >= 0.55 {
                         Some("draw")
