@@ -14,7 +14,7 @@ use crate::{
     capture::CapturedFrame,
     detector::{crop_bgra, Detection, YoloClass, YoloDetector, Roi},
     ocr::{ocr_from_bgra, preprocess_bgra},
-    preprocess::{extract_white_text, upscale_2x},
+    preprocess::{extract_white_text, save_debug_png, upscale_2x},
     types::{ExtractedMatchData, OcrDebugField, OcrDebugResult},
 };
 use anyhow::Result;
@@ -339,10 +339,11 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
 
 /// YOLO 検出結果を使って全フィールドの OCR 生テキストと正規化値を返す。
 /// debug_yolo コマンドから呼ばれる。ブロッキング呼び出しのため block_in_place 必須。
+/// 前処理各段階の画像を %TEMP%\inkgraph_ocr_debug\ に PNG として保存する。
 pub fn extract_debug_ocr(frame: &CapturedFrame, detections: &[Detection]) -> OcrDebugResult {
-    let rule_raw  = bbox_to_raw_text(frame, detections, YoloClass::RuleText,  "ja-JP");
-    let stage_raw = bbox_to_raw_text(frame, detections, YoloClass::StageText, "ja-JP");
-    let mode_raw  = bbox_to_raw_text(frame, detections, YoloClass::ModeText,  "ja-JP");
+    let rule_raw  = bbox_to_raw_text_debug(frame, detections, YoloClass::RuleText,  "ja-JP", "rule");
+    let stage_raw = bbox_to_raw_text_debug(frame, detections, YoloClass::StageText, "ja-JP", "stage");
+    let mode_raw  = bbox_to_raw_text_debug(frame, detections, YoloClass::ModeText,  "ja-JP", "mode");
 
     let arrow_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
         .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0);
@@ -350,9 +351,9 @@ pub fn extract_debug_ocr(frame: &CapturedFrame, detections: &[Detection]) -> Ocr
     let (kill_raw, death_raw, special_raw) = arrow_y.map(|y| {
         let y_top = (y - KDA_ROW_H / 2.0).max(0.0);
         (
-            roi_to_raw(frame, &Roi { x_ratio: KILL_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US"),
-            roi_to_raw(frame, &Roi { x_ratio: DEATH_COL_X, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US"),
-            roi_to_raw(frame, &Roi { x_ratio: SPEC_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: KILL_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "kill"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: DEATH_COL_X, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "death"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: SPEC_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "special"),
         )
     }).unwrap_or_default();
 
@@ -365,6 +366,40 @@ pub fn extract_debug_ocr(frame: &CapturedFrame, detections: &[Detection]) -> Ocr
         special: OcrDebugField { normalized: clean_numeric_text(&special_raw).parse::<i64>().ok().map(|v| v.to_string()), raw: special_raw },
         arrow_y,
     }
+}
+
+/// デバッグ版: クロップ・白抽出・アップスケール後の画像を PNG 保存しつつ OCR する。
+fn bbox_to_raw_text_debug(frame: &CapturedFrame, detections: &[Detection], class: YoloClass, lang: &str, label: &str) -> String {
+    let Some(det) = YoloDetector::best_detection(detections, class) else { return String::new(); };
+    let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
+    let y1 = (det.bbox.y1 * frame.height as f32) as u32;
+    let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
+    let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
+    let w  = x2.saturating_sub(x1).max(1);
+    let h  = y2.saturating_sub(y1).max(1);
+    let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
+    save_debug_png(&format!("{label}_1crop"), &cropped, w, h);
+    let preprocessed = extract_white_text(&cropped, w, h);
+    save_debug_png(&format!("{label}_2white"), &preprocessed, w, h);
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    save_debug_png(&format!("{label}_3upscale"), &upscaled, uw, uh);
+    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
+        .map(|r| r.text.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// デバッグ版: ROI クロップ各段階を PNG 保存しつつ OCR する。
+fn roi_to_raw_debug(frame: &CapturedFrame, roi: &Roi, lang: &str, label: &str) -> String {
+    let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
+    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    save_debug_png(&format!("{label}_1crop"), &cropped, w, h);
+    let preprocessed = extract_white_text(&cropped, w, h);
+    save_debug_png(&format!("{label}_2white"), &preprocessed, w, h);
+    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
+    save_debug_png(&format!("{label}_3upscale"), &upscaled, uw, uh);
+    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
+        .map(|r| r.text.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// BBox クロップ → 白文字抽出 → OCR 生テキスト。検出なければ空文字。

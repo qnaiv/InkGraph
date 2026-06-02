@@ -204,6 +204,28 @@ pub fn otsu_binarize(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+// デバッグ画像出力
+// ---------------------------------------------------------------------------
+
+/// BGRA8 バッファを PNG として `%TEMP%\inkgraph_ocr_debug\<label>.png` に保存する。
+/// デバッグ診断時のみ呼ぶ。失敗しても無視（ログのみ）。
+pub fn save_debug_png(label: &str, bgra: &[u8], width: u32, height: u32) {
+    let dir = std::env::temp_dir().join("inkgraph_ocr_debug");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("[debug_img] mkdir failed: {e}");
+        return;
+    }
+    let path = dir.join(format!("{label}.png"));
+    let rgba: Vec<u8> = bgra.chunks_exact(4)
+        .flat_map(|c| [c[2], c[1], c[0], c[3]])
+        .collect();
+    match image::save_buffer(&path, &rgba, width, height, image::ColorType::Rgba8) {
+        Ok(_)  => log::info!("[debug_img] saved: {}", path.display()),
+        Err(e) => log::warn!("[debug_img] save failed: {e}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------
 
