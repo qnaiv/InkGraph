@@ -37,6 +37,7 @@ log       = "0.4"
 once_cell = "1"
 thiserror = "1"
 anyhow    = "1"
+base64    = "0.22"
 
 # YOLO/ONNX 推論
 # download-binaries: ビルド時に ORT を自動ダウンロードして静的リンク

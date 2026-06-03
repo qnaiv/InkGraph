@@ -230,6 +230,7 @@ impl StatsDetector {
                 frame_w, frame_h, stats_model_loaded,
                 arrow_found: false,
                 crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                crop_image_base64: None,
                 detections: vec![],
                 kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
                 paint: None, kill: None, death: None, special: None,
@@ -245,8 +246,8 @@ impl StatsDetector {
         let crop_w = frame_w.saturating_sub(crop_x);
         let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
 
-        // デバッグ: クロップ画像を %TEMP%\inkgraph_ocr_debug\cascade_crop.png に保存
-        crate::preprocess::save_debug_png("cascade_crop", &cropped, crop_w, crop_h);
+        // クロップ画像を base64 PNG にエンコード (フロントエンド表示用)
+        let crop_image_base64 = encode_crop_base64(&cropped, crop_w, crop_h);
 
         // Step 2: Model 2 推論 (デバッグ時は閾値 0.10 で全候補を取得)
         let mut dets = match self.yolo.detect_debug_bgra(&cropped, crop_w, crop_h) {
@@ -261,6 +262,7 @@ impl StatsDetector {
                 frame_w, frame_h, stats_model_loaded,
                 arrow_found: true,
                 crop_x, crop_y, crop_w, crop_h,
+                crop_image_base64,
                 detections: vec![],
                 kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
                 paint: None, kill: None, death: None, special: None,
@@ -291,6 +293,7 @@ impl StatsDetector {
             frame_w, frame_h, stats_model_loaded,
             arrow_found: true,
             crop_x, crop_y, crop_w, crop_h,
+            crop_image_base64,
             detections: debug_dets,
             kill_anchor_x, death_anchor_x, special_anchor_x,
             paint:   stats.paint,
@@ -300,6 +303,17 @@ impl StatsDetector {
             error:   None,
         }
     }
+}
+
+fn encode_crop_base64(bgra: &[u8], width: u32, height: u32) -> Option<String> {
+    let rgba: Vec<u8> = bgra.chunks_exact(4)
+        .flat_map(|c| [c[2], c[1], c[0], c[3]])
+        .collect();
+    let img = image::RgbaImage::from_raw(width, height, rgba)?;
+    let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+    img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+    use base64::Engine as _;
+    Some(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
 /// 各検出の x_center とクラス名からグループ名を返す。

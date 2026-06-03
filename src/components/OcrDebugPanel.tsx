@@ -1,10 +1,12 @@
-// InkGraph — OCR デバッグパネル
-// Issue #2 の Windows 実機確認用。開発ビルド時のみ表示する。
+// InkGraph — デバッグパネル
 
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult, OcrDebugResult, CascadeDebugResult } from '../types';
+import type {
+  OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload,
+  FullDebugResult, OcrDebugResult, CascadeDebugDetection,
+} from '../types';
 
 export function OcrDebugPanel() {
   const [minimized, setMinimized] = useState(true);
@@ -17,73 +19,9 @@ export function OcrDebugPanel() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // ── ファイル OCR ──────────────────────────────────────────────────────────
-  const [imagePath, setImagePath] = useState('');
-  const [ocrResult, setOcrResult] = useState<OcrTestResult | null>(null);
-  const [ocrError, setOcrError]   = useState<string | null>(null);
-  const [ocrLoading, setOcrLoading] = useState(false);
-
-  const runOcr = async () => {
-    if (!imagePath.trim()) return;
-    setOcrLoading(true);
-    setOcrError(null);
-    setOcrResult(null);
-    try {
-      const res = await invoke<OcrTestResult>('test_ocr', { imagePath: imagePath.trim() });
-      setOcrResult(res);
-    } catch (e) {
-      setOcrError(String(e));
-    } finally {
-      setOcrLoading(false);
-    }
-  };
-
-  // ── ライブキャプチャ診断 ──────────────────────────────────────────────────
-  const [windows, setWindows]       = useState<WindowInfo[]>([]);
-  const [diagHwnd, setDiagHwnd]     = useState<number | null>(null);
-  const [diagResult, setDiagResult] = useState<CaptureDebugResult | null>(null);
-  const [diagError, setDiagError]   = useState<string | null>(null);
-  const [diagLoading, setDiagLoading] = useState(false);
-
-  // ── YOLO 診断 ──────────────────────────────────────────────────────────────
-  const [yoloResult, setYoloResult]   = useState<YoloDebugResult | null>(null);
-  const [yoloError, setYoloError]     = useState<string | null>(null);
-  const [yoloLoading, setYoloLoading] = useState(false);
-
-  // ── カスケード診断 ─────────────────────────────────────────────────────────
-  const [cascadeResult, setCascadeResult]   = useState<CascadeDebugResult | null>(null);
-  const [cascadeError, setCascadeError]     = useState<string | null>(null);
-  const [cascadeLoading, setCascadeLoading] = useState(false);
-
-  const runYoloDiag = async () => {
-    if (diagHwnd == null) return;
-    setYoloLoading(true);
-    setYoloError(null);
-    setYoloResult(null);
-    try {
-      const res = await invoke<YoloDebugResult>('debug_yolo', { hwnd: diagHwnd });
-      setYoloResult(res);
-    } catch (e) {
-      setYoloError(String(e));
-    } finally {
-      setYoloLoading(false);
-    }
-  };
-
-  const runCascadeDiag = async () => {
-    if (diagHwnd == null) return;
-    setCascadeLoading(true);
-    setCascadeError(null);
-    setCascadeResult(null);
-    try {
-      const res = await invoke<CascadeDebugResult>('debug_cascade', { hwnd: diagHwnd });
-      setCascadeResult(res);
-    } catch (e) {
-      setCascadeError(String(e));
-    } finally {
-      setCascadeLoading(false);
-    }
-  };
+  // ── ウィンドウ選択 ────────────────────────────────────────────────────────
+  const [windows, setWindows]   = useState<WindowInfo[]>([]);
+  const [diagHwnd, setDiagHwnd] = useState<number | null>(null);
 
   const loadWindows = async () => {
     try {
@@ -92,20 +30,50 @@ export function OcrDebugPanel() {
     } catch { /* ignore */ }
   };
 
+  // ── キャプチャ診断 (pixel ベース) ─────────────────────────────────────────
+  const [diagResult, setDiagResult]   = useState<CaptureDebugResult | null>(null);
+  const [diagError, setDiagError]     = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+
   const runDiag = async () => {
     if (diagHwnd == null) return;
-    setDiagLoading(true);
-    setDiagError(null);
-    setDiagResult(null);
+    setDiagLoading(true); setDiagError(null); setDiagResult(null);
     try {
-      const res = await invoke<CaptureDebugResult>('debug_capture', { hwnd: diagHwnd });
-      setDiagResult(res);
-    } catch (e) {
-      setDiagError(String(e));
-    } finally {
-      setDiagLoading(false);
-    }
+      setDiagResult(await invoke<CaptureDebugResult>('debug_capture', { hwnd: diagHwnd }));
+    } catch (e) { setDiagError(String(e)); }
+    finally { setDiagLoading(false); }
   };
+
+  // ── モデル診断 (YOLO + カスケード 統合) ──────────────────────────────────
+  const [fullResult, setFullResult]   = useState<FullDebugResult | null>(null);
+  const [fullError, setFullError]     = useState<string | null>(null);
+  const [fullLoading, setFullLoading] = useState(false);
+
+  const runFullDiag = async () => {
+    if (diagHwnd == null) return;
+    setFullLoading(true); setFullError(null); setFullResult(null);
+    try {
+      setFullResult(await invoke<FullDebugResult>('debug_full', { hwnd: diagHwnd }));
+    } catch (e) { setFullError(String(e)); }
+    finally { setFullLoading(false); }
+  };
+
+  // ── ファイル OCR ──────────────────────────────────────────────────────────
+  const [imagePath, setImagePath]     = useState('');
+  const [ocrResult, setOcrResult]     = useState<OcrTestResult | null>(null);
+  const [ocrError, setOcrError]       = useState<string | null>(null);
+  const [ocrLoading, setOcrLoading]   = useState(false);
+
+  const runOcr = async () => {
+    if (!imagePath.trim()) return;
+    setOcrLoading(true); setOcrError(null); setOcrResult(null);
+    try {
+      setOcrResult(await invoke<OcrTestResult>('test_ocr', { imagePath: imagePath.trim() }));
+    } catch (e) { setOcrError(String(e)); }
+    finally { setOcrLoading(false); }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   if (minimized) {
     return (
@@ -130,9 +98,26 @@ export function OcrDebugPanel() {
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-stretch justify-stretch">
       <div className="flex-1 bg-slate-900 border border-amber-500/30 text-sm flex flex-col overflow-hidden">
+
         {/* ヘッダー */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 shrink-0">
-          <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
+          <div className="flex items-center gap-3">
+            <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
+            {/* 検知エンジン状態 */}
+            {captureStatus?.active ? (
+              captureStatus.yolo_loaded ? (
+                <span className="px-2 py-0.5 rounded text-xs font-bold text-violet-200 bg-violet-600/40 border border-violet-400/60">
+                  🤖 YOLO (ONNX)
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded text-xs font-bold text-slate-300 bg-slate-700 border border-slate-500">
+                  📐 Pixel Fallback
+                </span>
+              )
+            ) : (
+              <span className="text-slate-500 text-xs">キャプチャ停止中</span>
+            )}
+          </div>
           <button
             className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
             onClick={() => setMinimized(true)}
@@ -141,359 +126,111 @@ export function OcrDebugPanel() {
           </button>
         </div>
 
-        {/* ─ スクロール可能なコンテンツ領域 ─ */}
+        {/* スクロール可能なコンテンツ */}
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
 
-      {/* ── 検知エンジン状態 ─────────────────────────────────────────────── */}
-      <div className={`rounded-lg p-3 flex items-center justify-between text-xs border ${
-        !captureStatus?.active
-          ? 'bg-slate-800 border-slate-700'
-          : captureStatus.yolo_loaded
-            ? 'bg-violet-900/30 border-violet-500/50'
-            : 'bg-slate-800 border-slate-600'
-      }`}>
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${captureStatus?.active ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
-          <span className="text-slate-300 font-semibold">検知エンジン</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {captureStatus?.active ? (
-            captureStatus.yolo_loaded ? (
-              <span className="px-2 py-0.5 rounded font-bold text-violet-200 bg-violet-600/40 border border-violet-400/60 tracking-wide">
-                🤖 YOLO (ONNX)
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded font-bold text-slate-300 bg-slate-700 border border-slate-500 tracking-wide">
-                📐 Pixel Fallback
-              </span>
-            )
-          ) : (
-            <span className="text-slate-500">キャプチャ停止中</span>
+          {/* ── ウィンドウ選択 + ボタン ───────────────────────────────── */}
+          <div className="flex gap-2">
+            <select
+              className="flex-1 bg-slate-800 text-white text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer"
+              value={diagHwnd ?? ''}
+              onFocus={loadWindows}
+              onChange={(e) => setDiagHwnd(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">ウィンドウを選択...</option>
+              {windows.map((w) => (
+                <option key={w.hwnd} value={w.hwnd}>{w.title.slice(0, 60)}</option>
+              ))}
+            </select>
+            <button
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+              onClick={runDiag}
+              disabled={diagLoading || diagHwnd == null}
+            >
+              {diagLoading ? '…' : '診断'}
+            </button>
+            <button
+              className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+              onClick={runFullDiag}
+              disabled={fullLoading || diagHwnd == null}
+            >
+              {fullLoading ? '…' : 'モデル診断'}
+            </button>
+          </div>
+
+          {/* ── モデル診断結果 ──────────────────────────────────────────── */}
+          {fullError && (
+            <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all">
+              ❌ {fullError}
+            </div>
           )}
-        </div>
-      </div>
+          {fullResult && <FullDebugPanel result={fullResult} />}
 
-      {/* ── ① ライブキャプチャ診断 ─────────────────────────────────────── */}
-      <section>
-        <p className="text-amber-300 text-xs font-semibold mb-2">① ライブキャプチャ診断</p>
-        <p className="text-slate-500 text-xs mb-2 leading-relaxed">
-          リザルト画面を表示した状態でウィンドウを選び「診断」を押す。<br />
-          各ステップの通過状況が確認できる。
-        </p>
+          <hr className="border-slate-700" />
 
-        <div className="flex gap-2 mb-2">
-          <select
-            className="flex-1 bg-slate-800 text-white text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer"
-            value={diagHwnd ?? ''}
-            onFocus={loadWindows}
-            onChange={(e) => setDiagHwnd(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">ウィンドウを選択...</option>
-            {windows.map((w) => (
-              <option key={w.hwnd} value={w.hwnd}>{w.title.slice(0, 45)}</option>
-            ))}
-          </select>
-          <button
-            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
-            onClick={runDiag}
-            disabled={diagLoading || diagHwnd == null}
-          >
-            {diagLoading ? '…' : '診断'}
-          </button>
-          <button
-            className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
-            onClick={runYoloDiag}
-            disabled={yoloLoading || diagHwnd == null}
-          >
-            {yoloLoading ? '…' : 'YOLO'}
-          </button>
-          <button
-            className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
-            onClick={runCascadeDiag}
-            disabled={cascadeLoading || diagHwnd == null}
-          >
-            {cascadeLoading ? '…' : 'カスケード'}
-          </button>
-        </div>
-
-        {/* YOLO 診断結果 */}
-        {yoloError && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all mb-2">
-            ❌ {yoloError}
-          </div>
-        )}
-        {yoloResult && (
-          <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-1">
-            <div className="flex justify-between items-center">
-              <span className="text-slate-400">YOLO診断</span>
-              <span className="text-slate-300 font-mono">{yoloResult.frame_w}×{yoloResult.frame_h}</span>
-            </div>
-            {yoloResult.error && (
-              <p className="text-red-400 break-all">{yoloResult.error}</p>
-            )}
-            {yoloResult.detections.length === 0 ? (
-              <p className="text-yellow-400">検出なし (信頼度0.10以上の候補がゼロ → モデルかフレームに問題あり)</p>
-            ) : (
-              <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                {yoloResult.detections
-                  .sort((a, b) => b.confidence - a.confidence)
-                  .map((d, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-slate-900 rounded px-1.5 py-0.5">
-                      <span className={`font-bold w-4 text-right ${d.confidence >= 0.60 ? 'text-green-400' : d.confidence >= 0.40 ? 'text-yellow-400' : 'text-slate-500'}`}>
-                        {d.confidence >= 0.60 ? '✓' : d.confidence >= 0.40 ? '△' : '✗'}
-                      </span>
-                      <span className="text-white font-mono w-24 truncate">{d.class_name}</span>
-                      <div className="flex-1 bg-slate-700 rounded-full h-1.5">
-                        <div
-                          className={`h-1.5 rounded-full ${d.confidence >= 0.60 ? 'bg-green-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
-                          style={{ width: `${Math.round(d.confidence * 100)}%` }}
-                        />
-                      </div>
-                      <span className="text-slate-300 font-mono w-10 text-right">{(d.confidence * 100).toFixed(0)}%</span>
-                    </div>
-                  ))}
+          {/* ── キャプチャ診断結果 ─────────────────────────────────────── */}
+          <section>
+            <p className="text-amber-300 text-xs font-semibold mb-2">キャプチャ診断 (pixel ベース)</p>
+            {diagError && (
+              <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all mb-2">
+                ❌ {diagError}
               </div>
             )}
-            <p className="text-slate-500 text-xs">✓=0.60↑(有効) △=0.40-0.60(閾値未満) ✗=0.10-0.40(弱い)</p>
+            {diagResult && <CaptureDiagSection result={diagResult} />}
+          </section>
 
-            {/* 勝敗判定デバッグ */}
-            {yoloResult.detections.length > 0 && (() => {
-              const PANEL_BOUNDARY_Y = 0.630;
-              const get = (name: string) =>
-                yoloResult.detections
-                  .filter((d) => d.class_name === name)
-                  .sort((a, b) => b.confidence - a.confidence)[0];
-              const winDet   = get('Win');
-              const loseDet  = get('Lose');
-              const drawDet  = get('Draw');
-              const arrowDet = get('MyArrow');
-              const isResultScreen = (winDet?.confidence ?? 0) >= 0.30 || (loseDet?.confidence ?? 0) >= 0.30;
-              const arrowY = arrowDet ? (arrowDet.y1 + arrowDet.y2) / 2 : null;
-              const arrowDecision = arrowY === null ? null : arrowY < PANEL_BOUNDARY_Y ? 'WIN' : 'LOSE';
-              const drawDetected = (drawDet?.confidence ?? 0) >= 0.55;
-              const verdict = drawDetected ? 'DRAW' : isResultScreen ? (arrowDecision ?? 'MyArrow未検知') : 'リザルト画面未検知';
-              const verdictColor = verdict === 'WIN' ? 'text-green-400' : verdict === 'LOSE' ? 'text-red-400' : verdict === 'DRAW' ? 'text-yellow-400' : 'text-slate-500';
+          <hr className="border-slate-700" />
 
-              return (
-                <div className="mt-1 border-t border-slate-700 pt-1 space-y-0.5">
-                  <p className="text-slate-400 mb-0.5">勝敗判定ログ</p>
-                  {[
-                    { label: 'Win クラス',  det: winDet,  threshold: 0.30, note: '≥0.30でリザルト画面検知' },
-                    { label: 'Lose クラス', det: loseDet, threshold: 0.30, note: '≥0.30でリザルト画面検知' },
-                    { label: 'Draw クラス', det: drawDet, threshold: 0.55, note: '≥0.55で引き分け確定' },
-                    { label: 'MyArrow',     det: arrowDet, threshold: 0.60, note: arrowY !== null ? `Y=${arrowY.toFixed(3)} → ${arrowDecision}` : '未検知 → ピクセル判定' },
-                  ].map(({ label, det, threshold, note }) => (
-                    <div key={label} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
-                      <span className={`font-bold w-4 text-right text-xs ${det && det.confidence >= threshold ? 'text-green-400' : 'text-slate-600'}`}>
-                        {det && det.confidence >= threshold ? '✓' : '✗'}
-                      </span>
-                      <span className="text-slate-300 font-mono w-20 text-xs">{label}</span>
-                      <span className="text-slate-400 font-mono w-8 text-right text-xs">
-                        {det ? `${(det.confidence * 100).toFixed(0)}%` : '—'}
-                      </span>
-                      <span className="text-slate-500 text-xs truncate flex-1">{note}</span>
-                    </div>
-                  ))}
-                  <div className={`flex items-center gap-1.5 bg-slate-900/80 rounded px-1.5 py-1 mt-0.5`}>
-                    <span className="text-slate-400 text-xs">→ 判定:</span>
-                    <span className={`font-bold text-xs ${verdictColor}`}>{verdict}</span>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* YOLO OCR 結果 */}
-        {yoloResult?.ocr && (
-          <OcrDebugSection ocr={yoloResult.ocr} />
-        )}
-
-        {/* カスケード診断結果 */}
-        {cascadeError && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all mb-2">
-            ❌ {cascadeError}
-          </div>
-        )}
-        {cascadeResult && (
-          <CascadeDebugSection result={cascadeResult} />
-        )}
-
-        {diagError && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all">
-            ❌ {diagError}
-          </div>
-        )}
-
-        {diagResult && (
-          <div className="space-y-1.5">
-            {/* フレーム情報 */}
-            <div className="bg-slate-800 rounded-lg p-2 flex justify-between text-xs">
-              <span className="text-slate-400">フレームサイズ</span>
-              <span className="text-white font-mono">{diagResult.frame_w} × {diagResult.frame_h}</span>
+          {/* ── ファイル OCR テスト ────────────────────────────────────── */}
+          <section>
+            <p className="text-amber-300 text-xs font-semibold mb-2">ファイル OCR テスト</p>
+            <div className="flex gap-2 mb-3">
+              <input
+                className="flex-1 bg-slate-800 text-white placeholder-slate-500 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                placeholder="C:\Users\...\result.png"
+                value={imagePath}
+                onChange={(e) => setImagePath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runOcr()}
+              />
+              <button
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors"
+                onClick={runOcr}
+                disabled={ocrLoading || !imagePath.trim()}
+              >
+                {ocrLoading ? '…' : 'OCR 実行'}
+              </button>
             </div>
-
-            {/* Phase 1: バトル開始 */}
-            <div className="bg-slate-800 rounded-lg p-2 text-xs">
-              <div className="flex justify-between mb-1">
-                <span className="text-slate-400">Phase 1: バトル開始</span>
-                <div className="flex gap-2">
-                  <span className={diagResult.dark_scroll_found ? 'text-green-400' : 'text-slate-600'}>
-                    {diagResult.dark_scroll_found ? '✓ 暗巻物' : '✗ 暗巻物'}
-                  </span>
-                  <span className={diagResult.battle_start_found ? 'text-green-400' : 'text-slate-500'}>
-                    {diagResult.battle_start_found ? '✓ 検出' : '✗ 未検出'}
-                  </span>
+            {ocrError && (
+              <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 mb-2 text-red-300 text-xs break-all">
+                ❌ {ocrError}
+              </div>
+            )}
+            {ocrResult && (
+              <div className="space-y-2">
+                <div className="bg-slate-800 rounded-lg p-2">
+                  <p className="text-slate-400 text-xs mb-1">認識テキスト (raw)</p>
+                  <pre className="text-green-300 text-xs whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                    {ocrResult.raw_text || '(空)'}
+                  </pre>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-2">
+                  <p className="text-slate-400 text-xs mb-1">行分割 ({ocrResult.lines.length} 行)</p>
+                  <ul className="text-white text-xs space-y-0.5 max-h-20 overflow-y-auto">
+                    {ocrResult.lines.map((l, i) => (
+                      <li key={i} className="flex gap-2">
+                        <span className="text-slate-500 w-4 text-right">{i + 1}</span>
+                        <span>{l}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
-              <pre className="text-slate-300 text-xs whitespace-pre-wrap break-all max-h-16 overflow-y-auto bg-slate-900 rounded p-1">
-                {diagResult.battle_start_text || '(空)'}
-              </pre>
-            </div>
-
-            {/* Phase 2: リザルト画面判定 */}
-            <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Phase 2: リザルト画面判定</span>
-                <span className={diagResult.win_grey_rows >= 2 && diagResult.lose_grey_rows >= 2 ? 'text-green-400' : 'text-slate-500'}>
-                  WIN側 {diagResult.win_grey_rows}/4 {diagResult.win_grey_rows >= 2 ? '✓' : '✗'}
-                  {' | '}
-                  LOSE側 {diagResult.lose_grey_rows}/4 {diagResult.lose_grey_rows >= 2 ? '✓' : '✗'}
-                </span>
-              </div>
-              <div className="grid grid-cols-4 gap-1 mt-1">
-                <div className="bg-slate-900 rounded p-1 text-center">
-                  <p className="text-slate-500 text-xs">WIN 側</p>
-                  <p className={`font-mono font-bold ${diagResult.yellow_win_px >= 100 ? 'text-green-400' : 'text-slate-300'}`}>
-                    {diagResult.yellow_win_px}
-                  </p>
-                </div>
-                <div className="bg-slate-900 rounded p-1 text-center">
-                  <p className="text-slate-500 text-xs">LOSE 側</p>
-                  <p className={`font-mono font-bold ${diagResult.yellow_lose_px >= 100 ? 'text-yellow-400' : 'text-slate-300'}`}>
-                    {diagResult.yellow_lose_px}
-                  </p>
-                </div>
-                <div className="bg-slate-900 rounded p-1 text-center">
-                  <p className="text-slate-500 text-xs">重心 y</p>
-                  <p className="text-white font-mono font-bold">{diagResult.centroid_y.toFixed(3)}</p>
-                </div>
-                <div className="bg-slate-900 rounded p-1 text-center">
-                  <p className="text-slate-500 text-xs">spread</p>
-                  <p className="text-slate-300 font-mono font-bold">
-                    {diagResult.y_spread}px
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* ルール・ステージ OCR */}
-            <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1.5">
-              <p className="text-slate-400 font-semibold">ルール / ステージ OCR</p>
-              <div className="flex gap-2">
-                <div className="flex-1 bg-slate-900 rounded p-1.5">
-                  <p className="text-slate-500 text-xs mb-0.5">ルール (raw)</p>
-                  <p className="text-white font-mono break-all">{diagResult.rule_ocr_text || '(空)'}</p>
-                  <p className={`text-xs mt-0.5 ${diagResult.rule_normalized ? 'text-green-400' : 'text-slate-500'}`}>
-                    → {diagResult.rule_normalized ?? '未マッチ'}
-                  </p>
-                </div>
-                <div className="flex-1 bg-slate-900 rounded p-1.5">
-                  <p className="text-slate-500 text-xs mb-0.5">ステージ (raw)</p>
-                  <p className="text-white font-mono break-all">{diagResult.stage_ocr_text || '(空)'}</p>
-                  <p className={`text-xs mt-0.5 ${diagResult.stage_normalized ? 'text-green-400' : 'text-slate-500'}`}>
-                    → {diagResult.stage_normalized ?? '未マッチ'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* 判定サマリー */}
-            <div className={`rounded-lg p-2 text-xs break-all ${
-              diagResult.detection_summary.includes('✓ WIN') ? 'bg-green-900/40 border border-green-700 text-green-300' :
-              diagResult.detection_summary.includes('✓ LOSE') ? 'bg-yellow-900/40 border border-yellow-700 text-yellow-300' :
-              diagResult.detection_summary.includes('Phase 1 ✓') ? 'bg-blue-900/40 border border-blue-700 text-blue-300' :
-              'bg-slate-800 border border-slate-600 text-slate-400'
-            }`}>
-              {diagResult.detection_summary}
-            </div>
-          </div>
-        )}
-      </section>
-
-      <hr className="border-slate-700" />
-
-      {/* ── ② ファイル OCR テスト ────────────────────────────────────────── */}
-      <section>
-        <p className="text-amber-300 text-xs font-semibold mb-2">② ファイル OCR テスト</p>
-
-        <div className="flex gap-2 mb-3">
-          <input
-            className="flex-1 bg-slate-800 text-white placeholder-slate-500 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-amber-500"
-            placeholder="C:\Users\...\result.png"
-            value={imagePath}
-            onChange={(e) => setImagePath(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && runOcr()}
-          />
-          <button
-            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg disabled:opacity-50 transition-colors"
-            onClick={runOcr}
-            disabled={ocrLoading || !imagePath.trim()}
-          >
-            {ocrLoading ? '…' : 'OCR 実行'}
-          </button>
-        </div>
-
-        {ocrError && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 mb-2 text-red-300 text-xs break-all">
-            ❌ {ocrError}
-          </div>
-        )}
-
-        {ocrResult && (
-          <div className="space-y-2">
-            <div className="bg-slate-800 rounded-lg p-2">
-              <p className="text-slate-400 text-xs mb-1">認識テキスト (raw)</p>
-              <pre className="text-green-300 text-xs whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                {ocrResult.raw_text || '(空)'}
-              </pre>
-            </div>
-            <div className="bg-slate-800 rounded-lg p-2">
-              <p className="text-slate-400 text-xs mb-1">行分割 ({ocrResult.lines.length} 行)</p>
-              <ul className="text-white text-xs space-y-0.5 max-h-20 overflow-y-auto">
-                {ocrResult.lines.map((l, i) => (
-                  <li key={i} className="flex gap-2">
-                    <span className="text-slate-500 w-4 text-right">{i + 1}</span>
-                    <span>{l}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {['WIN', 'LOSE', 'ガチエリア', 'ガチヤグラ', 'ガチホコ', 'ガチアサリ'].map((kw) => {
-                const found = ocrResult.raw_text.toUpperCase().includes(kw.toUpperCase());
-                return (
-                  <span
-                    key={kw}
-                    className={`text-xs px-1.5 py-0.5 rounded ${
-                      found
-                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-                        : 'bg-slate-700 text-slate-500'
-                    }`}
-                  >
-                    {found ? '✓' : '✗'} {kw}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <p className="text-slate-600 text-xs mt-3 leading-relaxed">
-          PNG/BMP を絶対パスで入力 → Enter。<br />
-          ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
-        </p>
-      </section>
+            )}
+            <p className="text-slate-600 text-xs mt-3 leading-relaxed">
+              PNG/BMP を絶対パスで入力 → Enter。<br />
+              ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
+            </p>
+          </section>
 
         </div>
       </div>
@@ -502,7 +239,179 @@ export function OcrDebugPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// カスケードデバッグセクション
+// モデル診断パネル (YOLO + カスケード 統合)
+// ---------------------------------------------------------------------------
+
+function FullDebugPanel({ result }: { result: FullDebugResult }) {
+  const PANEL_BOUNDARY_Y = 0.630;
+
+  // ── Model 1 の勝敗判定ロジック ──
+  const get = (name: string) =>
+    result.detections.filter((d) => d.class_name === name)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+  const winDet   = get('Win');
+  const loseDet  = get('Lose');
+  const drawDet  = get('Draw');
+  const arrowDet = get('MyArrow');
+  const isResultScreen = (winDet?.confidence ?? 0) >= 0.30 || (loseDet?.confidence ?? 0) >= 0.30;
+  const arrowY = arrowDet ? (arrowDet.y1 + arrowDet.y2) / 2 : null;
+  const arrowDecision = arrowY === null ? null : arrowY < PANEL_BOUNDARY_Y ? 'WIN' : 'LOSE';
+  const drawDetected = (drawDet?.confidence ?? 0) >= 0.55;
+  const verdict = drawDetected ? 'DRAW' : isResultScreen ? (arrowDecision ?? 'MyArrow未検知') : 'リザルト画面未検知';
+  const verdictColor = verdict === 'WIN' ? 'text-green-400' : verdict === 'LOSE' ? 'text-red-400' : verdict === 'DRAW' ? 'text-yellow-400' : 'text-slate-500';
+
+  return (
+    <div className="space-y-3 text-xs">
+      {/* フレーム + モデル状態 */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-slate-300 font-mono">{result.frame_w}×{result.frame_h}</span>
+        <span className={`px-1.5 py-0.5 rounded font-bold border ${result.model1_loaded ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-red-900/40 text-red-400 border-red-700/60'}`}>
+          {result.model1_loaded ? '✓ Model 1' : '✗ Model 1'}
+        </span>
+        <span className={`px-1.5 py-0.5 rounded font-bold border ${result.model2_loaded ? 'bg-teal-900/40 text-teal-300 border-teal-700/60' : 'bg-slate-700/40 text-slate-500 border-slate-600/40'}`}>
+          {result.model2_loaded ? '✓ Model 2' : '✗ Model 2'}
+        </span>
+        {result.error && <span className="text-red-400 break-all">{result.error}</span>}
+      </div>
+
+      {/* ── Model 1: 全クラス検出一覧 ── */}
+      <div className="bg-slate-800 rounded-lg p-2 space-y-1">
+        <p className="text-slate-400 font-semibold mb-1">Model 1 — 全クラス検出 (閾値 0.10)</p>
+        {result.detections.length === 0 ? (
+          <p className="text-yellow-400">検出なし (信頼度0.10以上の候補がゼロ)</p>
+        ) : (
+          <div className="space-y-0.5 max-h-40 overflow-y-auto">
+            {result.detections
+              .sort((a, b) => b.confidence - a.confidence)
+              .map((d, i) => (
+                <div key={i} className="flex items-center gap-2 bg-slate-900 rounded px-1.5 py-0.5">
+                  <span className={`font-bold w-4 text-right ${d.confidence >= 0.60 ? 'text-green-400' : d.confidence >= 0.40 ? 'text-yellow-400' : 'text-slate-500'}`}>
+                    {d.confidence >= 0.60 ? '✓' : d.confidence >= 0.40 ? '△' : '✗'}
+                  </span>
+                  <span className="text-white font-mono w-24 truncate">{d.class_name}</span>
+                  <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+                    <div
+                      className={`h-1.5 rounded-full ${d.confidence >= 0.60 ? 'bg-green-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+                      style={{ width: `${Math.round(d.confidence * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-slate-300 font-mono w-10 text-right">{(d.confidence * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+          </div>
+        )}
+        <p className="text-slate-600">✓=0.60↑(有効) △=0.40-0.60(閾値未満) ✗=0.10-0.40(弱い)</p>
+
+        {/* 勝敗判定ロジック */}
+        <div className="border-t border-slate-700 pt-1 space-y-0.5 mt-1">
+          <p className="text-slate-400 mb-0.5">勝敗判定ログ</p>
+          {[
+            { label: 'Win',     det: winDet,   threshold: 0.30, note: '≥0.30でリザルト画面検知' },
+            { label: 'Lose',    det: loseDet,  threshold: 0.30, note: '≥0.30でリザルト画面検知' },
+            { label: 'Draw',    det: drawDet,  threshold: 0.55, note: '≥0.55で引き分け確定' },
+            { label: 'MyArrow', det: arrowDet, threshold: 0.60, note: arrowY !== null ? `Y=${arrowY.toFixed(3)} → ${arrowDecision}` : '未検知 → ピクセル判定' },
+          ].map(({ label, det, threshold, note }) => (
+            <div key={label} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
+              <span className={`font-bold w-4 text-right ${det && det.confidence >= threshold ? 'text-green-400' : 'text-slate-600'}`}>
+                {det && det.confidence >= threshold ? '✓' : '✗'}
+              </span>
+              <span className="text-slate-300 font-mono w-20">{label}</span>
+              <span className="text-slate-400 font-mono w-8 text-right">{det ? `${(det.confidence * 100).toFixed(0)}%` : '—'}</span>
+              <span className="text-slate-500 truncate flex-1">{note}</span>
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5 bg-slate-900/80 rounded px-1.5 py-1">
+            <span className="text-slate-400">→ 判定:</span>
+            <span className={`font-bold ${verdictColor}`}>{verdict}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* YOLO OCR 結果 */}
+      {result.ocr && <OcrDebugSection ocr={result.ocr} />}
+
+      {/* ── Model 2: カスケード ── */}
+      <div className="bg-slate-800 rounded-lg p-2 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-teal-400 font-semibold">Model 2 — カスケード (stats)</p>
+          <div className="flex gap-2">
+            <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${result.arrow_found ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-yellow-900/40 text-yellow-400 border-yellow-700/60'}`}>
+              {result.arrow_found ? '✓ MyArrow 検出' : '✗ MyArrow 未検出'}
+            </span>
+          </div>
+        </div>
+
+        {result.arrow_found && (
+          <>
+            {/* クロップ情報 */}
+            <div className="bg-slate-900 rounded p-1.5 space-y-1">
+              <p className="text-slate-400 text-xs">
+                クロップ: x={result.crop_x} y={result.crop_y} &nbsp;/&nbsp; {result.crop_w}×{result.crop_h}px
+              </p>
+              <div className="flex gap-3 flex-wrap">
+                {[
+                  { label: 'icon_kill',    x: result.kill_anchor_x,    color: 'text-green-400' },
+                  { label: 'icon_death',   x: result.death_anchor_x,   color: 'text-red-400' },
+                  { label: 'icon_special', x: result.special_anchor_x, color: 'text-purple-400' },
+                ].map(({ label, x, color }) => (
+                  <span key={label} className="text-slate-500">
+                    {label}: <span className={`font-mono ${x !== null ? color : 'text-slate-600'}`}>{x !== null ? x.toFixed(3) : '—'}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* クロップ画像 */}
+            {result.crop_image_base64 && (
+              <div className="bg-black rounded overflow-hidden">
+                <img
+                  src={`data:image/png;base64,${result.crop_image_base64}`}
+                  className="w-full"
+                  style={{ imageRendering: 'pixelated', minHeight: '40px', maxHeight: '120px', objectFit: 'contain' }}
+                  alt="cascade crop"
+                />
+              </div>
+            )}
+
+            {/* 検出一覧 */}
+            {result.cascade_detections.length === 0 ? (
+              <p className="text-yellow-400">検出なし (信頼度0.10以上の候補がゼロ — クロップ画像を確認してください)</p>
+            ) : (
+              <div>
+                <p className="text-slate-400 mb-1">検出 ({result.cascade_detections.length}件, x_center 昇順)</p>
+                <div className="space-y-0.5 max-h-48 overflow-y-auto">
+                  {result.cascade_detections.map((d, i) => (
+                    <CascadeDetRow key={i} index={i} det={d} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* パース結果 */}
+            <div className="grid grid-cols-4 gap-1">
+              {[
+                { label: '塗り', value: result.paint,   color: 'text-cyan-300' },
+                { label: 'K',    value: result.kill,    color: 'text-green-300' },
+                { label: 'D',    value: result.death,   color: 'text-red-300' },
+                { label: 'SP',   value: result.special, color: 'text-purple-300' },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="bg-slate-900 rounded p-1.5 text-center">
+                  <p className="text-slate-500 text-xs">{label}</p>
+                  <p className={`font-mono font-bold text-sm ${value !== null ? color : 'text-slate-600'}`}>
+                    {value !== null ? value : '—'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// カスケード検出行
 // ---------------------------------------------------------------------------
 
 const GROUP_STYLES: Record<string, string> = {
@@ -516,102 +425,22 @@ const GROUP_STYLES: Record<string, string> = {
   ignored:        'bg-slate-700/40 text-slate-500 border-slate-600/40',
 };
 
-function CascadeDebugSection({ result }: { result: CascadeDebugResult }) {
+function CascadeDetRow({ index, det }: { index: number; det: CascadeDebugDetection }) {
   return (
-    <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-2">
-      <div className="flex justify-between items-center">
-        <span className="text-teal-400 font-semibold">カスケード診断</span>
-        <span className="text-slate-300 font-mono">{result.frame_w}×{result.frame_h}</span>
+    <div className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5 text-xs">
+      <span className="text-slate-500 font-mono w-5 text-right">{index + 1}</span>
+      <span className="text-white font-mono w-20 truncate">{det.class_name}</span>
+      <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+        <div
+          className={`h-1.5 rounded-full ${det.confidence >= 0.60 ? 'bg-teal-500' : det.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+          style={{ width: `${Math.round(det.confidence * 100)}%` }}
+        />
       </div>
-
-      {result.error && (
-        <p className="text-red-400 break-all">{result.error}</p>
-      )}
-
-      {/* モデル・MyArrow 状態 */}
-      <div className="flex gap-2 flex-wrap">
-        <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${result.stats_model_loaded ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-red-900/40 text-red-400 border-red-700/60'}`}>
-          {result.stats_model_loaded ? '✓ Stats モデル' : '✗ Stats モデル未ロード'}
-        </span>
-        <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${result.arrow_found ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-yellow-900/40 text-yellow-400 border-yellow-700/60'}`}>
-          {result.arrow_found ? '✓ MyArrow 検出' : '✗ MyArrow 未検出'}
-        </span>
-      </div>
-
-      {/* クロップ領域 */}
-      {result.arrow_found && (
-        <div className="bg-slate-900 rounded p-1.5 space-y-0.5">
-          <p className="text-slate-400 mb-0.5">クロップ領域</p>
-          <p className="text-slate-300 font-mono text-xs">
-            x={result.crop_x} y={result.crop_y} &nbsp;/&nbsp; {result.crop_w}×{result.crop_h}px
-          </p>
-          <div className="flex gap-3 text-xs text-slate-400 mt-0.5">
-            {[
-              { label: 'icon_kill',    x: result.kill_anchor_x,    color: 'text-green-400' },
-              { label: 'icon_death',   x: result.death_anchor_x,   color: 'text-red-400' },
-              { label: 'icon_special', x: result.special_anchor_x, color: 'text-purple-400' },
-            ].map(({ label, x, color }) => (
-              <span key={label}>
-                <span className="text-slate-500">{label}: </span>
-                <span className={`font-mono ${x !== null ? color : 'text-slate-600'}`}>
-                  {x !== null ? x.toFixed(3) : '—'}
-                </span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 検出一覧 */}
-      {result.detections.length === 0 && result.arrow_found && !result.error && (
-        <p className="text-yellow-400">
-          検出なし (信頼度0.10以上の候補がゼロ)<br />
-          <span className="text-slate-500">%TEMP%\inkgraph_ocr_debug\cascade_crop.png にクロップ画像を保存しました。内容を確認してください。</span>
-        </p>
-      )}
-      {result.detections.length > 0 && (
-        <div>
-          <p className="text-slate-400 mb-1">検出一覧 ({result.detections.length}件, x_center 昇順)</p>
-          <div className="space-y-0.5 max-h-48 overflow-y-auto">
-            {result.detections.map((d, i) => (
-              <div key={i} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
-                <span className="text-slate-500 font-mono w-5 text-right">{i + 1}</span>
-                <span className="text-white font-mono w-20 truncate">{d.class_name}</span>
-                <div className="flex-1 bg-slate-700 rounded-full h-1.5">
-                  <div
-                    className={`h-1.5 rounded-full ${d.confidence >= 0.60 ? 'bg-teal-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
-                    style={{ width: `${Math.round(d.confidence * 100)}%` }}
-                  />
-                </div>
-                <span className="text-slate-300 font-mono w-9 text-right">{(d.confidence * 100).toFixed(0)}%</span>
-                <span className="font-mono text-slate-500 w-12 text-right">{d.x_center.toFixed(3)}</span>
-                <span className={`px-1 py-px rounded text-xs border font-bold w-20 text-center truncate ${GROUP_STYLES[d.group] ?? 'text-slate-400'}`}>
-                  {d.group}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* パース結果サマリー */}
-      {result.arrow_found && (
-        <div className="grid grid-cols-4 gap-1">
-          {[
-            { label: '塗り', value: result.paint,   color: 'text-cyan-300' },
-            { label: 'K',    value: result.kill,    color: 'text-green-300' },
-            { label: 'D',    value: result.death,   color: 'text-red-300' },
-            { label: 'SP',   value: result.special, color: 'text-purple-300' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="bg-slate-900 rounded p-1.5 text-center">
-              <p className="text-slate-500 text-xs">{label}</p>
-              <p className={`font-mono font-bold text-sm ${value !== null ? color : 'text-slate-600'}`}>
-                {value !== null ? value : '—'}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
+      <span className="text-slate-300 font-mono w-9 text-right">{(det.confidence * 100).toFixed(0)}%</span>
+      <span className="font-mono text-slate-500 w-12 text-right">{det.x_center.toFixed(3)}</span>
+      <span className={`px-1 py-px rounded border font-bold w-20 text-center truncate ${GROUP_STYLES[det.group] ?? 'text-slate-400'}`}>
+        {det.group}
+      </span>
     </div>
   );
 }
@@ -631,9 +460,9 @@ function OcrDebugSection({ ocr }: { ocr: OcrDebugResult }) {
   ];
 
   return (
-    <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-1">
+    <div className="bg-slate-800 rounded-lg p-2 text-xs space-y-1">
       <div className="flex justify-between items-center mb-1">
-        <span className="text-slate-400">YOLO OCR 結果</span>
+        <span className="text-slate-400 font-semibold">YOLO OCR 結果</span>
         {ocr.arrow_y !== null && (
           <span className="text-slate-500 font-mono">MyArrow Y={ocr.arrow_y.toFixed(3)}</span>
         )}
@@ -657,6 +486,81 @@ function OcrDebugSection({ ocr }: { ocr: OcrDebugResult }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// キャプチャ診断セクション
+// ---------------------------------------------------------------------------
+
+function CaptureDiagSection({ result }: { result: CaptureDebugResult }) {
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div className="bg-slate-800 rounded-lg p-2 flex justify-between">
+        <span className="text-slate-400">フレームサイズ</span>
+        <span className="text-white font-mono">{result.frame_w} × {result.frame_h}</span>
+      </div>
+      <div className="bg-slate-800 rounded-lg p-2 space-y-1">
+        <div className="flex justify-between">
+          <span className="text-slate-400">Phase 1: バトル開始</span>
+          <div className="flex gap-2">
+            <span className={result.dark_scroll_found ? 'text-green-400' : 'text-slate-600'}>
+              {result.dark_scroll_found ? '✓ 暗巻物' : '✗ 暗巻物'}
+            </span>
+            <span className={result.battle_start_found ? 'text-green-400' : 'text-slate-500'}>
+              {result.battle_start_found ? '✓ 検出' : '✗ 未検出'}
+            </span>
+          </div>
+        </div>
+        <pre className="text-slate-300 whitespace-pre-wrap break-all max-h-16 overflow-y-auto bg-slate-900 rounded p-1">
+          {result.battle_start_text || '(空)'}
+        </pre>
+      </div>
+      <div className="bg-slate-800 rounded-lg p-2 space-y-1">
+        <div className="flex justify-between">
+          <span className="text-slate-400">Phase 2: リザルト画面</span>
+          <span className={result.win_grey_rows >= 2 && result.lose_grey_rows >= 2 ? 'text-green-400' : 'text-slate-500'}>
+            WIN {result.win_grey_rows}/4 | LOSE {result.lose_grey_rows}/4
+          </span>
+        </div>
+        <div className="grid grid-cols-4 gap-1">
+          {[
+            { label: 'WIN黄', value: result.yellow_win_px,  ok: result.yellow_win_px >= 100 },
+            { label: 'LOSE黄', value: result.yellow_lose_px, ok: result.yellow_lose_px >= 100 },
+            { label: '重心y', value: result.centroid_y.toFixed(3), ok: true },
+            { label: 'spread', value: `${result.y_spread}px`, ok: true },
+          ].map(({ label, value, ok }) => (
+            <div key={label} className="bg-slate-900 rounded p-1 text-center">
+              <p className="text-slate-500">{label}</p>
+              <p className={`font-mono font-bold ${ok ? 'text-slate-300' : 'text-slate-600'}`}>{value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="bg-slate-800 rounded-lg p-2 space-y-1">
+        <p className="text-slate-400 font-semibold">ルール / ステージ OCR</p>
+        <div className="flex gap-2">
+          {[
+            { label: 'ルール', raw: result.rule_ocr_text, norm: result.rule_normalized },
+            { label: 'ステージ', raw: result.stage_ocr_text, norm: result.stage_normalized },
+          ].map(({ label, raw, norm }) => (
+            <div key={label} className="flex-1 bg-slate-900 rounded p-1.5">
+              <p className="text-slate-500 mb-0.5">{label} (raw)</p>
+              <p className="text-white font-mono break-all">{raw || '(空)'}</p>
+              <p className={`mt-0.5 ${norm ? 'text-green-400' : 'text-slate-500'}`}>→ {norm ?? '未マッチ'}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className={`rounded-lg p-2 break-all ${
+        result.detection_summary.includes('✓ WIN') ? 'bg-green-900/40 border border-green-700 text-green-300' :
+        result.detection_summary.includes('✓ LOSE') ? 'bg-yellow-900/40 border border-yellow-700 text-yellow-300' :
+        result.detection_summary.includes('Phase 1 ✓') ? 'bg-blue-900/40 border border-blue-700 text-blue-300' :
+        'bg-slate-800 border border-slate-600 text-slate-400'
+      }`}>
+        {result.detection_summary}
+      </div>
     </div>
   );
 }

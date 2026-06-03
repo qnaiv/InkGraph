@@ -163,8 +163,38 @@ pub struct CascadeDebugResult {
     pub crop_y:             u32,
     pub crop_w:             u32,
     pub crop_h:             u32,
+    /// クロップ画像の base64 PNG (フロントエンド表示用)
+    pub crop_image_base64:  Option<String>,
     /// Model 2 の全検出 (x_center 昇順)
     pub detections:         Vec<CascadeDebugDetection>,
+    pub kill_anchor_x:      Option<f32>,
+    pub death_anchor_x:     Option<f32>,
+    pub special_anchor_x:   Option<f32>,
+    pub paint:              Option<i64>,
+    pub kill:               Option<i64>,
+    pub death:              Option<i64>,
+    pub special:            Option<i64>,
+    pub error:              Option<String>,
+}
+
+/// YOLO + カスケード統合デバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullDebugResult {
+    pub frame_w:            u32,
+    pub frame_h:            u32,
+    // Model 1 (yolo_result.onnx)
+    pub model1_loaded:      bool,
+    pub detections:         Vec<YoloDebugDetection>,
+    pub ocr:                Option<OcrDebugResult>,
+    // Cascade / Model 2 (yolo_stats.onnx)
+    pub model2_loaded:      bool,
+    pub arrow_found:        bool,
+    pub crop_x:             u32,
+    pub crop_y:             u32,
+    pub crop_w:             u32,
+    pub crop_h:             u32,
+    pub crop_image_base64:  Option<String>,
+    pub cascade_detections: Vec<CascadeDebugDetection>,
     pub kill_anchor_x:      Option<f32>,
     pub death_anchor_x:     Option<f32>,
     pub special_anchor_x:   Option<f32>,

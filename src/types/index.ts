@@ -109,16 +109,22 @@ export interface CascadeDebugDetection {
   group: 'paint' | 'kill' | 'death' | 'special' | 'anchor_kill' | 'anchor_death' | 'anchor_special' | 'ignored';
 }
 
-export interface CascadeDebugResult {
+export interface FullDebugResult {
   frame_w: number;
   frame_h: number;
-  stats_model_loaded: boolean;
+  // Model 1
+  model1_loaded: boolean;
+  detections: YoloDebugDetection[];
+  ocr: OcrDebugResult | null;
+  // Cascade / Model 2
+  model2_loaded: boolean;
   arrow_found: boolean;
   crop_x: number;
   crop_y: number;
   crop_w: number;
   crop_h: number;
-  detections: CascadeDebugDetection[];
+  crop_image_base64: string | null;
+  cascade_detections: CascadeDebugDetection[];
   kill_anchor_x: number | null;
   death_anchor_x: number | null;
   special_anchor_x: number | null;
