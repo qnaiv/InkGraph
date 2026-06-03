@@ -327,9 +327,15 @@ impl StatsDetector {
         let death_lo   = icon_left_x(&dets, "icon_death");
         let special_lo = icon_left_x(&dets, "icon_special");
 
-        let stats = cluster_and_parse(&dets);
+        // スタッツ集計は本番と同等の閾値 (0.50) でフィルタした検出のみ使う。
+        // 低確信度候補は検出リストには表示するが数値には反映しない。
+        let prod_dets: Vec<Detection> = dets.iter()
+            .filter(|d| d.confidence >= 0.50)
+            .cloned()
+            .collect();
+        let stats = cluster_and_parse(&prod_dets);
 
-        // 各検出にグループラベルを付与
+        // 全候補（閾値 0.10）にグループラベルを付与（デバッグ表示用）
         let debug_dets: Vec<CascadeDebugDetection> = dets.iter().map(|d| {
             let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
             CascadeDebugDetection {
