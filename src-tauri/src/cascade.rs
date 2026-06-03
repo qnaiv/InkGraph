@@ -75,9 +75,11 @@ impl StatsDetector {
     pub fn new(model_path: impl Into<PathBuf>) -> Self {
         let class_names: Vec<String> =
             STATS_CLASS_NAMES.iter().map(|s| s.to_string()).collect();
-        Self {
-            yolo: YoloDetector::new_with_classes(model_path, class_names),
-        }
+        let mut yolo = YoloDetector::new_with_classes(model_path, class_names);
+        // Roboflow はデフォルトで "Stretch" リサイズで学習するため、
+        // レターボックスではなくストレッチを使って前処理を一致させる。
+        yolo.use_stretch = true;
+        Self { yolo }
     }
 
     pub fn load(&mut self) -> Result<()> {
