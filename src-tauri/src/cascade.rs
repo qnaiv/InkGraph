@@ -130,7 +130,8 @@ impl StatsDetector {
         });
 
         // Steps 3–4: アンカー特定 → クラスタリング → パース
-        Ok(cluster_and_parse(&dets))
+        // dets は detect_bgra 時点で 0.50 フィルタ済みなので digit_min_conf=0.0 でよい
+        Ok(cluster_and_parse(&dets, 0.0))
     }
 }
 
@@ -140,12 +141,12 @@ impl StatsDetector {
 
 /// ソート済み検出結果からアンカーを特定し、4グループにパースする。
 ///
-/// 画面レイアウト（クロップ内、左→右）:
-///   [塗りP数]  icon_kill  [K数]  icon_death  [D数]  icon_special  [SP数]
+/// `digit_min_conf`: デジット収集に使う最低確信度。
+///   0.0  → 全候補を使用（本番は detect_bgra 時点で既にフィルタ済み）
+///   0.50 → デバッグ時、低確信度ノイズを除外して本番相当の集計にする
 ///
-/// グループ境界にはアイコンの **左端 (x1)** を使う。
-/// 中心±マージン方式ではアイコン直後の数字がマージン内に入って無視されるため。
-pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
+/// アイコン境界は `dets` 全体から探す（低確信度アイコンも境界として利用可）。
+pub fn cluster_and_parse(dets: &[Detection], digit_min_conf: f32) -> PlayerStats {
     let kill_lo    = icon_left_x(dets, "icon_kill");
     let death_lo   = icon_left_x(dets, "icon_death");
     let special_lo = icon_left_x(dets, "icon_special");
@@ -155,22 +156,20 @@ pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
         kill_lo, death_lo, special_lo
     );
 
-    // 境界アンカーが検出されている場合のみそのグループを有効とする。
-    // アンカーが None の場合は境界が定まらないため空リスト → None。
     let paint_digits = if kill_lo.is_some() {
-        collect_best_digits(dets, None, kill_lo)
+        collect_best_digits(dets, None, kill_lo, digit_min_conf)
     } else { vec![] };
 
     let kill_digits = if kill_lo.is_some() && death_lo.is_some() {
-        collect_best_digits(dets, kill_lo, death_lo)
+        collect_best_digits(dets, kill_lo, death_lo, digit_min_conf)
     } else { vec![] };
 
     let death_digits = if death_lo.is_some() && special_lo.is_some() {
-        collect_best_digits(dets, death_lo, special_lo)
+        collect_best_digits(dets, death_lo, special_lo, digit_min_conf)
     } else { vec![] };
 
     let special_digits = if special_lo.is_some() {
-        collect_best_digits(dets, special_lo, None)
+        collect_best_digits(dets, special_lo, None, digit_min_conf)
     } else { vec![] };
 
     log::debug!(
@@ -205,10 +204,11 @@ fn icon_left_x(dets: &[Detection], name: &str) -> Option<f32> {
 /// `lo <= x_center < hi` の範囲のデジット検出を収集し、
 /// 近傍位置（X_DEDUP_TOL 以内）の重複は最高確信度のみ残す。
 /// dets は x_center 昇順ソート済みであること。
-fn collect_best_digits(dets: &[Detection], lo: Option<f32>, hi: Option<f32>) -> Vec<u8> {
+fn collect_best_digits(dets: &[Detection], lo: Option<f32>, hi: Option<f32>, min_conf: f32) -> Vec<u8> {
     let in_range: Vec<&Detection> = dets.iter()
         .filter(|d| {
             if digit_value(&d.class_name).is_none() { return false; }
+            if d.confidence < min_conf { return false; }
             let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
             lo.map_or(true, |l| cx >= l) && hi.map_or(true, |h| cx < h)
         })
@@ -327,13 +327,9 @@ impl StatsDetector {
         let death_lo   = icon_left_x(&dets, "icon_death");
         let special_lo = icon_left_x(&dets, "icon_special");
 
-        // スタッツ集計は本番と同等の閾値 (0.50) でフィルタした検出のみ使う。
-        // 低確信度候補は検出リストには表示するが数値には反映しない。
-        let prod_dets: Vec<Detection> = dets.iter()
-            .filter(|d| d.confidence >= 0.50)
-            .cloned()
-            .collect();
-        let stats = cluster_and_parse(&prod_dets);
+        // スタッツ集計: digit_min_conf=0.50 でデジットノイズを除外し本番相当にする。
+        // アイコン境界は dets 全体から取るため、低確信度アイコンも境界として活用できる。
+        let stats = cluster_and_parse(&dets, 0.50);
 
         // 全候補（閾値 0.10）にグループラベルを付与（デバッグ表示用）
         let debug_dets: Vec<CascadeDebugDetection> = dets.iter().map(|d| {
@@ -470,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_cluster_no_detections() {
-        let stats = cluster_and_parse(&[]);
+        let stats = cluster_and_parse(&[], 0.0);
         assert!(stats.paint.is_none());
         assert!(stats.kill.is_none());
         assert!(stats.death.is_none());
@@ -481,7 +477,7 @@ mod tests {
     fn test_cluster_no_anchors() {
         // アンカーなし → 境界が定まらないため全グループ None
         let dets = vec![make_det("digit_3", 0.5, 0.9)];
-        let stats = cluster_and_parse(&dets);
+        let stats = cluster_and_parse(&dets, 0.0);
         assert!(stats.paint.is_none(), "paint should be None without kill anchor");
         assert!(stats.kill.is_none());
         assert!(stats.death.is_none());
@@ -512,7 +508,7 @@ mod tests {
             cx(a).partial_cmp(&cx(b)).unwrap_or(Ordering::Equal)
         });
 
-        let stats = cluster_and_parse(&dets);
+        let stats = cluster_and_parse(&dets, 0.0);
         assert_eq!(stats.paint,   Some(15));
         assert_eq!(stats.kill,    Some(30));
         assert_eq!(stats.death,   Some(2));
@@ -538,7 +534,7 @@ mod tests {
             cx(a).partial_cmp(&cx(b)).unwrap_or(Ordering::Equal)
         });
 
-        let stats = cluster_and_parse(&dets);
+        let stats = cluster_and_parse(&dets, 0.0);
         assert_eq!(stats.paint, Some(91)); // digit_9 と digit_1(0.281)
         assert_eq!(stats.kill,  Some(2));  // digit_2(0.35) のみ
         assert_eq!(stats.death, None);     // 数字なし
