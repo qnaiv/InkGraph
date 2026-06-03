@@ -209,6 +209,129 @@ fn digits_to_int(digits: &[u8]) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
+// デバッグ
+// ---------------------------------------------------------------------------
+
+impl StatsDetector {
+    /// カスケード推論の中間状態を含む診断結果を返す。
+    /// `arrow` が None の場合は MyArrow 未検出として early-return する。
+    pub fn run_cascade_debug(
+        &mut self,
+        frame: &CapturedFrame,
+        arrow: Option<&Detection>,
+    ) -> crate::types::CascadeDebugResult {
+        use crate::types::{CascadeDebugDetection, CascadeDebugResult};
+        let (frame_w, frame_h) = (frame.width, frame.height);
+        let stats_model_loaded = self.is_loaded();
+
+        let arrow = match arrow {
+            Some(a) => a,
+            None => return CascadeDebugResult {
+                frame_w, frame_h, stats_model_loaded,
+                arrow_found: false,
+                crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                detections: vec![],
+                kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
+                paint: None, kill: None, death: None, special: None,
+                error: None,
+            },
+        };
+
+        // Step 1: クロップ
+        let y_px = ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame_h as f32) as u32;
+        let crop_y = y_px.saturating_sub(CROP_HALF_H);
+        let crop_h = (CROP_HALF_H * 2).min(frame_h.saturating_sub(crop_y));
+        let crop_x = (frame_w as f32 * STATS_X_START) as u32;
+        let crop_w = frame_w.saturating_sub(crop_x);
+        let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
+
+        // Step 2: Model 2 推論
+        let mut dets = match self.yolo.detect_bgra(&cropped, crop_w, crop_h) {
+            Ok(mut d) => {
+                d.sort_by(|a, b| {
+                    let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
+                    cx(a).partial_cmp(&cx(b)).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                d
+            }
+            Err(e) => return CascadeDebugResult {
+                frame_w, frame_h, stats_model_loaded,
+                arrow_found: true,
+                crop_x, crop_y, crop_w, crop_h,
+                detections: vec![],
+                kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
+                paint: None, kill: None, death: None, special: None,
+                error: Some(format!("Model 2 推論エラー: {e}")),
+            },
+        };
+
+        // アンカー座標
+        let kill_anchor_x    = icon_x(&dets, "icon_kill");
+        let death_anchor_x   = icon_x(&dets, "icon_death");
+        let special_anchor_x = icon_x(&dets, "icon_special");
+
+        let stats = cluster_and_parse(&dets);
+
+        // 各検出にグループラベルを付与
+        let m = ANCHOR_MARGIN;
+        let debug_dets: Vec<CascadeDebugDetection> = dets.iter().map(|d| {
+            let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
+            CascadeDebugDetection {
+                class_name: d.class_name.clone(),
+                confidence: d.confidence,
+                x_center:   cx,
+                group: assign_group(cx, &d.class_name, kill_anchor_x, death_anchor_x, special_anchor_x, m),
+            }
+        }).collect();
+
+        CascadeDebugResult {
+            frame_w, frame_h, stats_model_loaded,
+            arrow_found: true,
+            crop_x, crop_y, crop_w, crop_h,
+            detections: debug_dets,
+            kill_anchor_x, death_anchor_x, special_anchor_x,
+            paint:   stats.paint,
+            kill:    stats.kill,
+            death:   stats.death,
+            special: stats.special,
+            error:   None,
+        }
+    }
+}
+
+/// 各検出の x_center とクラス名からグループ名を返す。
+fn assign_group(
+    cx:         f32,
+    class_name: &str,
+    kill_x:     Option<f32>,
+    death_x:    Option<f32>,
+    special_x:  Option<f32>,
+    m:          f32,
+) -> String {
+    match class_name {
+        "icon_kill"    => return "anchor_kill".to_string(),
+        "icon_death"   => return "anchor_death".to_string(),
+        "icon_special" => return "anchor_special".to_string(),
+        _ => {}
+    }
+    if digit_value(class_name).is_none() {
+        return "ignored".to_string();
+    }
+    // マージン帯（アンカーの ±m 以内）は cluster_and_parse で捨てられる
+    if kill_x.map_or(false, |kx| (cx - kx).abs() <= m)
+        || death_x.map_or(false, |dx| (cx - dx).abs() <= m)
+        || special_x.map_or(false, |sx| (cx - sx).abs() <= m)
+    {
+        return "ignored".to_string();
+    }
+    // 左から順に最初に当てはまるグループを返す
+    if kill_x.map_or(true, |kx| cx < kx - m) { "paint".to_string() }
+    else if death_x.map_or(true, |dx| cx < dx - m) { "kill".to_string() }
+    else if special_x.map_or(true, |sx| cx < sx - m) { "death".to_string() }
+    else { "special".to_string() }
+}
+
+// ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------
 

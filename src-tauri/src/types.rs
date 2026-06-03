@@ -142,7 +142,39 @@ pub struct OcrDebugField {
     pub normalized: Option<String>,
 }
 
-/// OCR デバッグ: YOLO 検出領域から読んだ全フィールド
+/// カスケードデバッグ: Model 2 の1検出エントリ（グループ割り当て付き）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CascadeDebugDetection {
+    pub class_name:  String,
+    pub confidence:  f32,
+    pub x_center:    f32,
+    /// "paint" | "kill" | "death" | "special" | "anchor_kill" | "anchor_death" | "anchor_special" | "ignored"
+    pub group:       String,
+}
+
+/// カスケードデバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CascadeDebugResult {
+    pub frame_w:            u32,
+    pub frame_h:            u32,
+    pub stats_model_loaded: bool,
+    pub arrow_found:        bool,
+    pub crop_x:             u32,
+    pub crop_y:             u32,
+    pub crop_w:             u32,
+    pub crop_h:             u32,
+    /// Model 2 の全検出 (x_center 昇順)
+    pub detections:         Vec<CascadeDebugDetection>,
+    pub kill_anchor_x:      Option<f32>,
+    pub death_anchor_x:     Option<f32>,
+    pub special_anchor_x:   Option<f32>,
+    pub paint:              Option<i64>,
+    pub kill:               Option<i64>,
+    pub death:              Option<i64>,
+    pub special:            Option<i64>,
+    pub error:              Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrDebugResult {
     pub rule:    OcrDebugField,

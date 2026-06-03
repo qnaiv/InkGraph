@@ -102,6 +102,33 @@ export interface YoloDebugResult {
   error: string | null;
 }
 
+export interface CascadeDebugDetection {
+  class_name: string;
+  confidence: number;
+  x_center: number;
+  group: 'paint' | 'kill' | 'death' | 'special' | 'anchor_kill' | 'anchor_death' | 'anchor_special' | 'ignored';
+}
+
+export interface CascadeDebugResult {
+  frame_w: number;
+  frame_h: number;
+  stats_model_loaded: boolean;
+  arrow_found: boolean;
+  crop_x: number;
+  crop_y: number;
+  crop_w: number;
+  crop_h: number;
+  detections: CascadeDebugDetection[];
+  kill_anchor_x: number | null;
+  death_anchor_x: number | null;
+  special_anchor_x: number | null;
+  paint: number | null;
+  kill: number | null;
+  death: number | null;
+  special: number | null;
+  error: string | null;
+}
+
 export interface XpDataPoint {
   played_at: string;
   xp_after: number;

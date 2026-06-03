@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
-    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo, YoloDebugResult, YoloDebugDetection},
+    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo, YoloDebugResult, YoloDebugDetection, CascadeDebugResult},
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +159,76 @@ pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
     {
         let _ = hwnd;
         Err("debug_yolo は Windows 専用です".to_string())
+    }
+}
+
+/// カスケード推論（2段階 YOLO）の診断情報を返す。
+/// Model 1 で MyArrow を検出し、Model 2 でスタッツ領域の数字・アイコンを検出する。
+#[tauri::command]
+pub async fn debug_cascade(hwnd: u64) -> Result<CascadeDebugResult, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::{
+            cascade::StatsDetector,
+            detector::{YoloDetector, YoloClass},
+        };
+
+        let result_model_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_result.onnx")))
+            .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_result.onnx"));
+        let stats_model_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_stats.onnx")))
+            .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_stats.onnx"));
+
+        let mut yolo  = YoloDetector::new(&result_model_path);
+        let mut stats = StatsDetector::new(&stats_model_path);
+
+        if let Err(e) = tokio::task::block_in_place(|| yolo.load()) {
+            return Ok(CascadeDebugResult {
+                frame_w: 0, frame_h: 0,
+                stats_model_loaded: false, arrow_found: false,
+                crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                detections: vec![],
+                kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
+                paint: None, kill: None, death: None, special: None,
+                error: Some(format!("yolo_result.onnx ロード失敗: {e}")),
+            });
+        }
+
+        let stats_loaded = tokio::task::block_in_place(|| stats.load()).is_ok();
+
+        let session = tokio::task::block_in_place(|| crate::capture::WindowCaptureSession::new(hwnd))
+            .map_err(|e| format!("WGC session failed: {e}"))?;
+        let frame = get_frame_with_retry(&session).await
+            .map_err(|e| format!("get_frame failed: {e}"))?;
+
+        let (fw, fh) = (frame.width, frame.height);
+
+        if !stats_loaded {
+            return Ok(CascadeDebugResult {
+                frame_w: fw, frame_h: fh,
+                stats_model_loaded: false, arrow_found: false,
+                crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                detections: vec![],
+                kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
+                paint: None, kill: None, death: None, special: None,
+                error: Some("yolo_stats.onnx が見つかりません (assets/models/ に配置してください)".to_string()),
+            });
+        }
+
+        // Model 1: MyArrow 検出
+        let m1_dets = tokio::task::block_in_place(|| yolo.detect(&frame))
+            .map_err(|e| format!("YOLO (Model 1) detect failed: {e}"))?;
+        let arrow = YoloDetector::best_detection(&m1_dets, YoloClass::MyArrow);
+
+        Ok(tokio::task::block_in_place(|| stats.run_cascade_debug(&frame, arrow)))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = hwnd;
+        Err("debug_cascade は Windows 専用です".to_string())
     }
 }
 

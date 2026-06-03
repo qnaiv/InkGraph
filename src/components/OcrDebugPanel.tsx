@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult, OcrDebugResult } from '../types';
+import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult, OcrDebugResult, CascadeDebugResult } from '../types';
 
 export function OcrDebugPanel() {
   const [minimized, setMinimized] = useState(true);
@@ -50,6 +50,11 @@ export function OcrDebugPanel() {
   const [yoloError, setYoloError]     = useState<string | null>(null);
   const [yoloLoading, setYoloLoading] = useState(false);
 
+  // ── カスケード診断 ─────────────────────────────────────────────────────────
+  const [cascadeResult, setCascadeResult]   = useState<CascadeDebugResult | null>(null);
+  const [cascadeError, setCascadeError]     = useState<string | null>(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
+
   const runYoloDiag = async () => {
     if (diagHwnd == null) return;
     setYoloLoading(true);
@@ -62,6 +67,21 @@ export function OcrDebugPanel() {
       setYoloError(String(e));
     } finally {
       setYoloLoading(false);
+    }
+  };
+
+  const runCascadeDiag = async () => {
+    if (diagHwnd == null) return;
+    setCascadeLoading(true);
+    setCascadeError(null);
+    setCascadeResult(null);
+    try {
+      const res = await invoke<CascadeDebugResult>('debug_cascade', { hwnd: diagHwnd });
+      setCascadeResult(res);
+    } catch (e) {
+      setCascadeError(String(e));
+    } finally {
+      setCascadeLoading(false);
     }
   };
 
@@ -182,6 +202,13 @@ export function OcrDebugPanel() {
           >
             {yoloLoading ? '…' : 'YOLO'}
           </button>
+          <button
+            className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            onClick={runCascadeDiag}
+            disabled={cascadeLoading || diagHwnd == null}
+          >
+            {cascadeLoading ? '…' : 'カスケード'}
+          </button>
         </div>
 
         {/* YOLO 診断結果 */}
@@ -275,6 +302,16 @@ export function OcrDebugPanel() {
         {/* YOLO OCR 結果 */}
         {yoloResult?.ocr && (
           <OcrDebugSection ocr={yoloResult.ocr} />
+        )}
+
+        {/* カスケード診断結果 */}
+        {cascadeError && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 text-red-300 text-xs break-all mb-2">
+            ❌ {cascadeError}
+          </div>
+        )}
+        {cascadeResult && (
+          <CascadeDebugSection result={cascadeResult} />
         )}
 
         {diagError && (
@@ -452,6 +489,118 @@ export function OcrDebugPanel() {
           ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
         </p>
       </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// カスケードデバッグセクション
+// ---------------------------------------------------------------------------
+
+const GROUP_STYLES: Record<string, string> = {
+  paint:          'bg-cyan-900/60 text-cyan-300 border-cyan-700/60',
+  kill:           'bg-green-900/60 text-green-300 border-green-700/60',
+  death:          'bg-red-900/60 text-red-300 border-red-700/60',
+  special:        'bg-purple-900/60 text-purple-300 border-purple-700/60',
+  anchor_kill:    'bg-green-700/40 text-green-200 border-green-600/60',
+  anchor_death:   'bg-red-700/40 text-red-200 border-red-600/60',
+  anchor_special: 'bg-purple-700/40 text-purple-200 border-purple-600/60',
+  ignored:        'bg-slate-700/40 text-slate-500 border-slate-600/40',
+};
+
+function CascadeDebugSection({ result }: { result: CascadeDebugResult }) {
+  return (
+    <div className="bg-slate-800 rounded-lg p-2 mb-2 text-xs space-y-2">
+      <div className="flex justify-between items-center">
+        <span className="text-teal-400 font-semibold">カスケード診断</span>
+        <span className="text-slate-300 font-mono">{result.frame_w}×{result.frame_h}</span>
+      </div>
+
+      {result.error && (
+        <p className="text-red-400 break-all">{result.error}</p>
+      )}
+
+      {/* モデル・MyArrow 状態 */}
+      <div className="flex gap-2 flex-wrap">
+        <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${result.stats_model_loaded ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-red-900/40 text-red-400 border-red-700/60'}`}>
+          {result.stats_model_loaded ? '✓ Stats モデル' : '✗ Stats モデル未ロード'}
+        </span>
+        <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${result.arrow_found ? 'bg-green-900/40 text-green-300 border-green-700/60' : 'bg-yellow-900/40 text-yellow-400 border-yellow-700/60'}`}>
+          {result.arrow_found ? '✓ MyArrow 検出' : '✗ MyArrow 未検出'}
+        </span>
+      </div>
+
+      {/* クロップ領域 */}
+      {result.arrow_found && (
+        <div className="bg-slate-900 rounded p-1.5 space-y-0.5">
+          <p className="text-slate-400 mb-0.5">クロップ領域</p>
+          <p className="text-slate-300 font-mono text-xs">
+            x={result.crop_x} y={result.crop_y} &nbsp;/&nbsp; {result.crop_w}×{result.crop_h}px
+          </p>
+          <div className="flex gap-3 text-xs text-slate-400 mt-0.5">
+            {[
+              { label: 'icon_kill',    x: result.kill_anchor_x,    color: 'text-green-400' },
+              { label: 'icon_death',   x: result.death_anchor_x,   color: 'text-red-400' },
+              { label: 'icon_special', x: result.special_anchor_x, color: 'text-purple-400' },
+            ].map(({ label, x, color }) => (
+              <span key={label}>
+                <span className="text-slate-500">{label}: </span>
+                <span className={`font-mono ${x !== null ? color : 'text-slate-600'}`}>
+                  {x !== null ? x.toFixed(3) : '—'}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 検出一覧 */}
+      {result.detections.length === 0 && result.arrow_found && !result.error && (
+        <p className="text-yellow-400">検出なし (yolo_stats.onnx が正常に動作しているか確認してください)</p>
+      )}
+      {result.detections.length > 0 && (
+        <div>
+          <p className="text-slate-400 mb-1">検出一覧 ({result.detections.length}件, x_center 昇順)</p>
+          <div className="space-y-0.5 max-h-48 overflow-y-auto">
+            {result.detections.map((d, i) => (
+              <div key={i} className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5">
+                <span className="text-slate-500 font-mono w-5 text-right">{i + 1}</span>
+                <span className="text-white font-mono w-20 truncate">{d.class_name}</span>
+                <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full ${d.confidence >= 0.60 ? 'bg-teal-500' : d.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+                    style={{ width: `${Math.round(d.confidence * 100)}%` }}
+                  />
+                </div>
+                <span className="text-slate-300 font-mono w-9 text-right">{(d.confidence * 100).toFixed(0)}%</span>
+                <span className="font-mono text-slate-500 w-12 text-right">{d.x_center.toFixed(3)}</span>
+                <span className={`px-1 py-px rounded text-xs border font-bold w-20 text-center truncate ${GROUP_STYLES[d.group] ?? 'text-slate-400'}`}>
+                  {d.group}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* パース結果サマリー */}
+      {result.arrow_found && (
+        <div className="grid grid-cols-4 gap-1">
+          {[
+            { label: '塗り', value: result.paint,   color: 'text-cyan-300' },
+            { label: 'K',    value: result.kill,    color: 'text-green-300' },
+            { label: 'D',    value: result.death,   color: 'text-red-300' },
+            { label: 'SP',   value: result.special, color: 'text-purple-300' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="bg-slate-900 rounded p-1.5 text-center">
+              <p className="text-slate-500 text-xs">{label}</p>
+              <p className={`font-mono font-bold text-sm ${value !== null ? color : 'text-slate-600'}`}>
+                {value !== null ? value : '—'}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
