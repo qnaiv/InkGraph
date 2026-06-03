@@ -732,6 +732,20 @@ impl YoloDetector {
         self.detect(&frame)
     }
 
+    /// デバッグ用 BGRA 版: 閾値 0.10 で推論して全候補を返す。
+    pub fn detect_debug_bgra(&mut self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<Detection>> {
+        let frame = crate::capture::CapturedFrame {
+            bgra: bgra.to_vec(),
+            width,
+            height,
+        };
+        let orig = self.conf_threshold;
+        self.conf_threshold = 0.10;
+        let result = self.detect(&frame);
+        self.conf_threshold = orig;
+        result
+    }
+
     /// デバッグ用: 閾値 0.10 で検出して全候補を返す。
     /// 通常の閾値 (0.70) では捨てられる低確信度候補も含めることで
     /// モデルが何を見ているか診断できる。

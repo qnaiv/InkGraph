@@ -564,7 +564,10 @@ function CascadeDebugSection({ result }: { result: CascadeDebugResult }) {
 
       {/* 検出一覧 */}
       {result.detections.length === 0 && result.arrow_found && !result.error && (
-        <p className="text-yellow-400">検出なし (yolo_stats.onnx が正常に動作しているか確認してください)</p>
+        <p className="text-yellow-400">
+          検出なし (信頼度0.10以上の候補がゼロ)<br />
+          <span className="text-slate-500">%TEMP%\inkgraph_ocr_debug\cascade_crop.png にクロップ画像を保存しました。内容を確認してください。</span>
+        </p>
       )}
       {result.detections.length > 0 && (
         <div>

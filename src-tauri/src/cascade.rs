@@ -245,8 +245,11 @@ impl StatsDetector {
         let crop_w = frame_w.saturating_sub(crop_x);
         let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
 
-        // Step 2: Model 2 推論
-        let mut dets = match self.yolo.detect_bgra(&cropped, crop_w, crop_h) {
+        // デバッグ: クロップ画像を %TEMP%\inkgraph_ocr_debug\cascade_crop.png に保存
+        crate::preprocess::save_debug_png("cascade_crop", &cropped, crop_w, crop_h);
+
+        // Step 2: Model 2 推論 (デバッグ時は閾値 0.10 で全候補を取得)
+        let mut dets = match self.yolo.detect_debug_bgra(&cropped, crop_w, crop_h) {
             Ok(mut d) => {
                 d.sort_by(|a, b| {
                     let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
