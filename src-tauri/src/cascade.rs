@@ -28,9 +28,9 @@ const STATS_X_START: f32 = 0.45;
 /// 余計な黒余白を含めるとストレッチ後にアイコン位置が学習時とずれて検出精度が落ちる。
 const STATS_X_END: f32 = 0.88;
 
-/// アイコン x_center に対するマージン (比率)。
-/// アンカー座標の微小なブレを吸収する。
-const ANCHOR_MARGIN: f32 = 0.02;
+/// 同一位置とみなす x 距離（正規化 [0,1]）。
+/// 同位置に複数クラスが検出された場合、最高確信度のみ残す。
+const X_DEDUP_TOL: f32 = 0.015;
 
 // ---------------------------------------------------------------------------
 // Model 2 クラス名
@@ -142,23 +142,36 @@ impl StatsDetector {
 ///
 /// 画面レイアウト（クロップ内、左→右）:
 ///   [塗りP数]  icon_kill  [K数]  icon_death  [D数]  icon_special  [SP数]
+///
+/// グループ境界にはアイコンの **左端 (x1)** を使う。
+/// 中心±マージン方式ではアイコン直後の数字がマージン内に入って無視されるため。
 pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
-    let kill_x    = icon_x(dets, "icon_kill");
-    let death_x   = icon_x(dets, "icon_death");
-    let special_x = icon_x(dets, "icon_special");
+    let kill_lo    = icon_left_x(dets, "icon_kill");
+    let death_lo   = icon_left_x(dets, "icon_death");
+    let special_lo = icon_left_x(dets, "icon_special");
 
     log::debug!(
-        "[cascade] anchors: kill={:?} death={:?} special={:?}",
-        kill_x, death_x, special_x
+        "[cascade] boundaries (icon x1): kill={:?} death={:?} special={:?}",
+        kill_lo, death_lo, special_lo
     );
 
-    let m = ANCHOR_MARGIN;
+    // 境界アンカーが検出されている場合のみそのグループを有効とする。
+    // アンカーが None の場合は境界が定まらないため空リスト → None。
+    let paint_digits = if kill_lo.is_some() {
+        collect_best_digits(dets, None, kill_lo)
+    } else { vec![] };
 
-    // 各グループの x 範囲: (lo 排他, hi 排他), None = 境界なし
-    let paint_digits   = collect_digits(dets, None,                   kill_x.map(|x| x - m));
-    let kill_digits    = collect_digits(dets, kill_x.map(|x| x + m),  death_x.map(|x| x - m));
-    let death_digits   = collect_digits(dets, death_x.map(|x| x + m), special_x.map(|x| x - m));
-    let special_digits = collect_digits(dets, special_x.map(|x| x + m), None);
+    let kill_digits = if kill_lo.is_some() && death_lo.is_some() {
+        collect_best_digits(dets, kill_lo, death_lo)
+    } else { vec![] };
+
+    let death_digits = if death_lo.is_some() && special_lo.is_some() {
+        collect_best_digits(dets, death_lo, special_lo)
+    } else { vec![] };
+
+    let special_digits = if special_lo.is_some() {
+        collect_best_digits(dets, special_lo, None)
+    } else { vec![] };
 
     log::debug!(
         "[cascade] paint={:?} kill={:?} death={:?} sp={:?}",
@@ -173,7 +186,7 @@ pub fn cluster_and_parse(dets: &[Detection]) -> PlayerStats {
     }
 }
 
-/// 指定クラス名のアイコン x_center を返す。複数検出時は最高確信度を優先。
+/// 指定クラス名のアイコン x_center を返す（表示用）。
 fn icon_x(dets: &[Detection], name: &str) -> Option<f32> {
     dets.iter()
         .filter(|d| d.class_name == name)
@@ -181,25 +194,49 @@ fn icon_x(dets: &[Detection], name: &str) -> Option<f32> {
         .map(|d| (d.bbox.x1 + d.bbox.x2) / 2.0)
 }
 
-/// `lo < x_center < hi` の範囲に入る数字クラスを左から順に収集する。
-/// dets はすでに x_center 昇順にソート済みであること。
-fn collect_digits(
-    dets: &[Detection],
-    lo:   Option<f32>,
-    hi:   Option<f32>,
-) -> Vec<u8> {
+/// 指定クラス名のアイコン左端 (x1) を返す（グループ境界計算用）。
+fn icon_left_x(dets: &[Detection], name: &str) -> Option<f32> {
     dets.iter()
-        .filter_map(|d| {
+        .filter(|d| d.class_name == name)
+        .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
+        .map(|d| d.bbox.x1)
+}
+
+/// `lo <= x_center < hi` の範囲のデジット検出を収集し、
+/// 近傍位置（X_DEDUP_TOL 以内）の重複は最高確信度のみ残す。
+/// dets は x_center 昇順ソート済みであること。
+fn collect_best_digits(dets: &[Detection], lo: Option<f32>, hi: Option<f32>) -> Vec<u8> {
+    let in_range: Vec<&Detection> = dets.iter()
+        .filter(|d| {
+            if digit_value(&d.class_name).is_none() { return false; }
             let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
-            let in_lo = lo.map_or(true, |l| cx > l);
-            let in_hi = hi.map_or(true, |h| cx < h);
-            if in_lo && in_hi {
-                digit_value(&d.class_name)
-            } else {
-                None
-            }
+            lo.map_or(true, |l| cx >= l) && hi.map_or(true, |h| cx < h)
         })
-        .collect()
+        .collect();
+
+    let mut result: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < in_range.len() {
+        let cxi = (in_range[i].bbox.x1 + in_range[i].bbox.x2) / 2.0;
+        let mut best = in_range[i];
+        let mut j = i + 1;
+        while j < in_range.len() {
+            let cxj = (in_range[j].bbox.x1 + in_range[j].bbox.x2) / 2.0;
+            if (cxj - cxi).abs() <= X_DEDUP_TOL {
+                if in_range[j].confidence > best.confidence {
+                    best = in_range[j];
+                }
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if let Some(v) = digit_value(&best.class_name) {
+            result.push(v);
+        }
+        i = j;
+    }
+    result
 }
 
 /// `"digit_N"` クラス名から数字値を取り出す。
@@ -280,22 +317,26 @@ impl StatsDetector {
             },
         };
 
-        // アンカー座標
+        // アンカー中心座標（表示用）
         let kill_anchor_x    = icon_x(&dets, "icon_kill");
         let death_anchor_x   = icon_x(&dets, "icon_death");
         let special_anchor_x = icon_x(&dets, "icon_special");
 
+        // アンカー左端座標（グループ境界・ラベル付与用）
+        let kill_lo    = icon_left_x(&dets, "icon_kill");
+        let death_lo   = icon_left_x(&dets, "icon_death");
+        let special_lo = icon_left_x(&dets, "icon_special");
+
         let stats = cluster_and_parse(&dets);
 
         // 各検出にグループラベルを付与
-        let m = ANCHOR_MARGIN;
         let debug_dets: Vec<CascadeDebugDetection> = dets.iter().map(|d| {
             let cx = (d.bbox.x1 + d.bbox.x2) / 2.0;
             CascadeDebugDetection {
                 class_name: d.class_name.clone(),
                 confidence: d.confidence,
                 x_center:   cx,
-                group: assign_group(cx, &d.class_name, kill_anchor_x, death_anchor_x, special_anchor_x, m),
+                group: assign_group(cx, &d.class_name, kill_lo, death_lo, special_lo),
             }
         }).collect();
 
@@ -326,14 +367,14 @@ fn encode_crop_base64(bgra: &[u8], width: u32, height: u32) -> Option<String> {
     Some(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
-/// 各検出の x_center とクラス名からグループ名を返す。
+/// 各検出の x_center とクラス名からグループ名を返す（デバッグ表示用）。
+/// アイコン左端を境界として使用する。
 fn assign_group(
     cx:         f32,
     class_name: &str,
-    kill_x:     Option<f32>,
-    death_x:    Option<f32>,
-    special_x:  Option<f32>,
-    m:          f32,
+    kill_lo:    Option<f32>,
+    death_lo:   Option<f32>,
+    special_lo: Option<f32>,
 ) -> String {
     match class_name {
         "icon_kill"    => return "anchor_kill".to_string(),
@@ -344,17 +385,10 @@ fn assign_group(
     if digit_value(class_name).is_none() {
         return "ignored".to_string();
     }
-    // マージン帯（アンカーの ±m 以内）は cluster_and_parse で捨てられる
-    if kill_x.map_or(false, |kx| (cx - kx).abs() <= m)
-        || death_x.map_or(false, |dx| (cx - dx).abs() <= m)
-        || special_x.map_or(false, |sx| (cx - sx).abs() <= m)
-    {
-        return "ignored".to_string();
-    }
-    // 左から順に最初に当てはまるグループを返す
-    if kill_x.map_or(true, |kx| cx < kx - m) { "paint".to_string() }
-    else if death_x.map_or(true, |dx| cx < dx - m) { "kill".to_string() }
-    else if special_x.map_or(true, |sx| cx < sx - m) { "death".to_string() }
+    // アイコン左端を境界とした単純な区間判定
+    if kill_lo.map_or(true, |kx| cx < kx) { "paint".to_string() }
+    else if death_lo.map_or(true, |dx| cx < dx) { "kill".to_string() }
+    else if special_lo.map_or(true, |sx| cx < sx) { "death".to_string() }
     else { "special".to_string() }
 }
 
@@ -439,10 +473,10 @@ mod tests {
 
     #[test]
     fn test_cluster_no_anchors() {
-        // 数字のみでアンカーなし → 全フィールド None
+        // アンカーなし → 境界が定まらないため全グループ None
         let dets = vec![make_det("digit_3", 0.5, 0.9)];
         let stats = cluster_and_parse(&dets);
-        assert!(stats.paint.is_none());
+        assert!(stats.paint.is_none(), "paint should be None without kill anchor");
         assert!(stats.kill.is_none());
         assert!(stats.death.is_none());
         assert!(stats.special.is_none());
@@ -479,18 +513,19 @@ mod tests {
         assert_eq!(stats.special, Some(12));
     }
 
-    /// マージン内の数字は隣のグループに「漏れない」ことを確認
+    /// アイコン左端境界: アイコン直前の数字は paint グループへ
     #[test]
-    fn test_cluster_margin_boundary() {
-        // icon_kill x=0.30 → margin=0.02
-        // 0.279 < 0.30 - 0.02 = 0.28 → paint グループ (境界外)
-        // 0.281 > 0.28 だが < 0.30 + 0.02 = 0.32 → どちらのグループにも入らない
+    fn test_cluster_boundary_at_icon_left_edge() {
+        // icon_kill の make_det は x1 = cx - 0.01 = 0.29
+        // digit_1 at cx=0.281 < 0.29 → paint グループ
+        // digit_1 at cx=0.35  ≥ 0.29 かつ < death_x1=0.49 → kill グループ
         let mut dets = vec![
-            make_det("digit_9",     0.10, 0.9), // paint
-            make_det("icon_kill", 0.30, 0.9),
-            make_det("digit_1",     0.281, 0.9), // margin 内 → 捨てられる
-            make_det("icon_death",  0.50, 0.9),
-            make_det("icon_special",0.70, 0.9),
+            make_det("digit_9",      0.10,  0.9),
+            make_det("icon_kill",    0.30,  0.9),
+            make_det("digit_1",      0.281, 0.9), // icon x1=0.29 より左 → paint
+            make_det("digit_2",      0.35,  0.9), // icon x1=0.29 より右 → kill
+            make_det("icon_death",   0.50,  0.9),
+            make_det("icon_special", 0.70,  0.9),
         ];
         dets.sort_by(|a, b| {
             let cx = |d: &Detection| (d.bbox.x1 + d.bbox.x2) / 2.0;
@@ -498,7 +533,9 @@ mod tests {
         });
 
         let stats = cluster_and_parse(&dets);
-        assert_eq!(stats.paint, Some(9));  // digit_9 のみ
-        assert_eq!(stats.kill,  None);     // margin 内の digit_1 は捨てられる
+        assert_eq!(stats.paint, Some(91)); // digit_9 と digit_1(0.281)
+        assert_eq!(stats.kill,  Some(2));  // digit_2(0.35) のみ
+        assert_eq!(stats.death, None);     // 数字なし
+        assert_eq!(stats.special, None);   // 数字なし
     }
 }
