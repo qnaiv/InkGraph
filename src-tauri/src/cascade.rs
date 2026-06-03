@@ -23,6 +23,11 @@ const CROP_HALF_H: u32 = 50;
 /// 塗りポイント〜SP カラムはすべてこの位置より右にある
 const STATS_X_START: f32 = 0.45;
 
+/// スタッツ領域の終了位置 (画面幅に対する比率)
+/// SP カウント右端の直後で切る。ここより右は黒背景のみで学習データに含まれていない。
+/// 余計な黒余白を含めるとストレッチ後にアイコン位置が学習時とずれて検出精度が落ちる。
+const STATS_X_END: f32 = 0.88;
+
 /// アイコン x_center に対するマージン (比率)。
 /// アンカー座標の微小なブレを吸収する。
 const ANCHOR_MARGIN: f32 = 0.02;
@@ -98,13 +103,15 @@ impl StatsDetector {
         frame: &CapturedFrame,
         arrow: &Detection,
     ) -> Result<PlayerStats> {
-        // Step 1: MyArrow y_center ±CROP_HALF_H px、x ≥ STATS_X_START でクロップ
+        // Step 1: MyArrow y_center ±CROP_HALF_H px、STATS_X_START ≤ x ≤ STATS_X_END でクロップ
+        // 右側の余分な黒背景を除くことで、ストレッチ後のアイコン位置を学習データと一致させる
         let y_px =
             ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame.height as f32) as u32;
         let crop_y = y_px.saturating_sub(CROP_HALF_H);
         let crop_h = (CROP_HALF_H * 2).min(frame.height.saturating_sub(crop_y));
         let crop_x = (frame.width as f32 * STATS_X_START) as u32;
-        let crop_w = frame.width.saturating_sub(crop_x);
+        let crop_right = ((frame.width as f32 * STATS_X_END) as u32).min(frame.width);
+        let crop_w = crop_right.saturating_sub(crop_x);
 
         let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
 
@@ -240,12 +247,13 @@ impl StatsDetector {
             },
         };
 
-        // Step 1: クロップ
+        // Step 1: クロップ（右側の余分な黒背景を除いて学習データと一致させる）
         let y_px = ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame_h as f32) as u32;
         let crop_y = y_px.saturating_sub(CROP_HALF_H);
         let crop_h = (CROP_HALF_H * 2).min(frame_h.saturating_sub(crop_y));
         let crop_x = (frame_w as f32 * STATS_X_START) as u32;
-        let crop_w = frame_w.saturating_sub(crop_x);
+        let crop_right = ((frame_w as f32 * STATS_X_END) as u32).min(frame_w);
+        let crop_w = crop_right.saturating_sub(crop_x);
         let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
 
         // クロップ画像を base64 PNG にエンコード (フロントエンド表示用)
