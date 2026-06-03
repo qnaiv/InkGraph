@@ -128,16 +128,21 @@ export function OcrDebugPanel() {
   }
 
   return (
-    <div className="fixed bottom-4 left-4 w-[420px] bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm space-y-5 max-h-[90vh] overflow-y-auto">
-      <div className="flex items-center justify-between">
-        <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
-        <button
-          className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
-          onClick={() => setMinimized(true)}
-        >
-          最小化
-        </button>
-      </div>
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-stretch justify-stretch">
+      <div className="flex-1 bg-slate-900 border border-amber-500/30 text-sm flex flex-col overflow-hidden">
+        {/* ヘッダー */}
+        <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 shrink-0">
+          <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
+          <button
+            className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+            onClick={() => setMinimized(true)}
+          >
+            閉じる
+          </button>
+        </div>
+
+        {/* ─ スクロール可能なコンテンツ領域 ─ */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
 
       {/* ── 検知エンジン状態 ─────────────────────────────────────────────── */}
       <div className={`rounded-lg p-3 flex items-center justify-between text-xs border ${
@@ -489,6 +494,9 @@ export function OcrDebugPanel() {
           ja-JP 言語パックが必要: 設定 → 時刻と言語 → 言語 → 日本語
         </p>
       </section>
+
+        </div>
+      </div>
     </div>
   );
 }
