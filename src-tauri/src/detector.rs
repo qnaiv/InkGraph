@@ -1007,9 +1007,9 @@ mod yolo_tests {
     #[test]
     fn test_yolo_class_from_id() {
         assert_eq!(YoloClass::from_id(0), Some(YoloClass::BattleStart));
-        assert_eq!(YoloClass::from_id(3), Some(YoloClass::Win));
-        assert_eq!(YoloClass::from_id(7), Some(YoloClass::MyArrow));
-        assert_eq!(YoloClass::from_id(9), Some(YoloClass::StageText));
+        assert_eq!(YoloClass::from_id(3), Some(YoloClass::KillLog));
+        assert_eq!(YoloClass::from_id(7), Some(YoloClass::RuleText));
+        assert_eq!(YoloClass::from_id(9), Some(YoloClass::Win));
         assert!(YoloClass::from_id(99).is_none());
     }
 

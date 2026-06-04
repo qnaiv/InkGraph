@@ -315,16 +315,8 @@ pub fn normalize_stage(raw: &str) -> Option<String> {
 pub fn normalize_mode(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() { return None; }
-    // ModeText BBox がルール領域を誤検知した場合を除外（完全一致 + ファジー）
-    let rule_names_exact = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
-                             "AREA", "TOWER", "RAINMAKER", "CLAM"];
-    let upper_raw = raw.to_uppercase();
-    for r in &rule_names_exact {
-        if upper_raw.contains(&r.to_uppercase()) { return None; }
-    }
-    let rule_names_fuzzy = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
-    if fuzzy_best_match(trimmed, &rule_names_fuzzy, 0.35).is_some() { return None; }
 
+    // 既知のモードエイリアスを先に確認（ファジー除外より優先）
     let candidates: &[(&str, &[&str])] = &[
         ("Xマッチ",                   &["Xマッチ", "X BATTLE", "Xバトル", "X MATCH"]),
         ("バンカラマッチ(チャレンジ)", &["チャレンジ", "CHALLENGE", "ANARCHY OPEN"]),
@@ -340,6 +332,17 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
             }
         }
     }
+
+    // ModeText BBox がルール領域を誤検知した場合を除外（完全一致 + ファジー）
+    let rule_names_exact = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
+                             "AREA", "TOWER", "RAINMAKER", "CLAM"];
+    let upper_raw = raw.to_uppercase();
+    for r in &rule_names_exact {
+        if upper_raw.contains(&r.to_uppercase()) { return None; }
+    }
+    let rule_names_fuzzy = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
+    if fuzzy_best_match(trimmed, &rule_names_fuzzy, 0.35).is_some() { return None; }
+
     None
 }
 
