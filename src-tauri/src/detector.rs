@@ -692,6 +692,14 @@ pub struct YoloDetector {
     model_path:     PathBuf,
     conf_threshold: f32,
     iou_threshold:  f32,
+    /// カスタムクラス名リスト。Some の場合は class_id インデックスで参照する。
+    /// None の場合は YoloClass enum で解決する（Model 1 デフォルト）。
+    class_names:    Option<Vec<String>>,
+    /// true にするとレターボックスの代わりにストレッチ（アスペクト比無視リサイズ）を使う。
+    /// Roboflow がストレッチで学習したモデルに合わせるために Model 2 で使用。
+    pub use_stretch: bool,
+    /// 最初の推論でモデル情報をログ出力済みかどうか（インスタンスごと）。
+    has_logged_first: std::sync::atomic::AtomicBool,
 }
 
 impl YoloDetector {
@@ -702,10 +710,50 @@ impl YoloDetector {
             model_path:     model_path.into(),
             conf_threshold: DEFAULT_CONF_THRESHOLD,
             iou_threshold:  DEFAULT_IOU_THRESHOLD,
+            class_names:    None,
+            use_stretch:    false,
+            has_logged_first: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// カスタムクラス名リストを持つバリアント（Model 2 / カスケード用）。
+    pub fn new_with_classes(model_path: impl Into<PathBuf>, class_names: Vec<String>) -> Self {
+        Self {
+            session:        None,
+            model_path:     model_path.into(),
+            conf_threshold: DEFAULT_CONF_THRESHOLD,
+            iou_threshold:  DEFAULT_IOU_THRESHOLD,
+            class_names:    Some(class_names),
+            use_stretch:    false,
+            has_logged_first: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     pub fn is_loaded(&self) -> bool { self.session.is_some() }
+
+    /// クロップ済み BGRA バッファを直接受け取る推論メソッド（カスケード用）。
+    pub fn detect_bgra(&mut self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<Detection>> {
+        let frame = crate::capture::CapturedFrame {
+            bgra: bgra.to_vec(),
+            width,
+            height,
+        };
+        self.detect(&frame)
+    }
+
+    /// デバッグ用 BGRA 版: 閾値 0.10 で推論して全候補を返す。
+    pub fn detect_debug_bgra(&mut self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<Detection>> {
+        let frame = crate::capture::CapturedFrame {
+            bgra: bgra.to_vec(),
+            width,
+            height,
+        };
+        let orig = self.conf_threshold;
+        self.conf_threshold = 0.10;
+        let result = self.detect(&frame);
+        self.conf_threshold = orig;
+        result
+    }
 
     /// デバッグ用: 閾値 0.10 で検出して全候補を返す。
     /// 通常の閾値 (0.70) では捨てられる低確信度候補も含めることで
@@ -750,13 +798,22 @@ impl YoloDetector {
             None    => return Ok(vec![]),
         };
 
-        // 1. 前処理: BGRA → レターボックスリサイズ → CHW f32 テンソル
-        let (chw, params) = letterbox_bgra(
-            &frame.bgra, frame.width, frame.height, YOLO_INPUT_SIZE,
-        )?;
+        // 1. 前処理: BGRA → リサイズ → CHW f32 テンソル
+        // use_stretch=true のときはアスペクト比を無視してリサイズ（Roboflow学習と一致させる）
+        let ts = YOLO_INPUT_SIZE as usize;
+        let (chw, params_opt) = if self.use_stretch {
+            let chw = crate::preprocess::stretch_bgra(
+                &frame.bgra, frame.width, frame.height, YOLO_INPUT_SIZE,
+            )?;
+            (chw, None)
+        } else {
+            let (chw, params) = letterbox_bgra(
+                &frame.bgra, frame.width, frame.height, YOLO_INPUT_SIZE,
+            )?;
+            (chw, Some(params))
+        };
 
         // 2. 推論実行: shape = [1, 3, 640, 640]
-        let ts = YOLO_INPUT_SIZE as usize;
         let input_tensor = Tensor::<f32>::from_array((vec![1usize, 3, ts, ts], chw))?;
         let outputs = session.run(ort::inputs!["images" => input_tensor])?;
 
@@ -771,29 +828,32 @@ impl YoloDetector {
         let nc          = (output_shape[1] as usize) - 4; // モデルの実クラス数
         let num_anchors = output_shape[2] as usize;       // 8400
 
-        // 初回のみ INFO ログ (nc の不一致をユーザーに明示)
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static FIRST_RUN: AtomicBool = AtomicBool::new(true);
-        if FIRST_RUN.swap(false, Ordering::Relaxed) {
-            let code_nc = YoloClass::num_classes();
-            if nc != code_nc {
-                log::warn!(
-                    "[yolo] ⚠️ nc mismatch: ONNX model has nc={nc} but code expects nc={code_nc}. \
-                     Classes with id>={nc} (e.g. Win={}) will not be detected. \
-                     Re-export your ONNX from the latest trained .pt file.",
-                    YoloClass::Win as usize
-                );
-            } else {
-                log::info!("[yolo] nc={nc}, anchors={num_anchors} ✓");
+        // モデルごとに初回のみ詳細ログ
+        use std::sync::atomic::Ordering;
+        if !self.has_logged_first.swap(true, Ordering::Relaxed) {
+            log::info!(
+                "[yolo] first detect: path={}, output_shape={:?}, nc={nc}, anchors={num_anchors}, stretch={}",
+                self.model_path.display(), output_shape, self.use_stretch
+            );
+            if self.class_names.is_none() {
+                let code_nc = YoloClass::num_classes();
+                if nc != code_nc {
+                    log::warn!(
+                        "[yolo] ⚠️ nc mismatch: model nc={nc} != code nc={code_nc}. \
+                         Win={} など未対応クラスは検出されません。",
+                        YoloClass::Win as usize
+                    );
+                }
             }
         }
 
         log::debug!(
-            "[yolo] output shape={:?}, nc(model)={nc}, nc(code)={}, anchors={num_anchors}",
-            output_shape, YoloClass::num_classes()
+            "[yolo] output shape={:?}, nc={nc}, anchors={num_anchors}",
+            output_shape
         );
 
         let mut raw_detections: Vec<Detection> = Vec::new();
+        let mut max_conf_seen = 0f32;
 
         for anchor_idx in 0..num_anchors {
             // cx, cy, w, h (in YOLO input pixel space)
@@ -814,16 +874,35 @@ impl YoloDetector {
                 }
             }
 
+            if max_conf > max_conf_seen { max_conf_seen = max_conf; }
             if max_conf < self.conf_threshold { continue; }
 
-            // 座標を元フレームの正規化座標へ変換
-            let (x1, y1, x2, y2) = params.to_normalized(cx, cy, bw, bh);
+            // 座標を元フレーム（クロップ）の正規化座標へ変換
+            let (x1, y1, x2, y2) = if let Some(ref params) = params_opt {
+                // レターボックス: パディングを除いた座標変換
+                params.to_normalized(cx, cy, bw, bh)
+            } else {
+                // ストレッチ: YOLO 入力 px を [0,1] に直接正規化
+                let s = YOLO_INPUT_SIZE as f32;
+                let x1 = ((cx - bw / 2.0) / s).clamp(0.0, 1.0);
+                let y1 = ((cy - bh / 2.0) / s).clamp(0.0, 1.0);
+                let x2 = ((cx + bw / 2.0) / s).clamp(0.0, 1.0);
+                let y2 = ((cy + bh / 2.0) / s).clamp(0.0, 1.0);
+                (x1, y1, x2, y2)
+            };
 
+            let class_name = match &self.class_names {
+                Some(names) => names
+                    .get(max_class)
+                    .cloned()
+                    .unwrap_or_else(|| format!("class_{max_class}")),
+                None => format!("{:?}", YoloClass::from_id(max_class)
+                    .unwrap_or(YoloClass::BattleStart)),
+            };
             raw_detections.push(Detection {
                 bbox: BBox { x1, y1, x2, y2 },
                 class_id:   max_class,
-                class_name: format!("{:?}", YoloClass::from_id(max_class)
-                    .unwrap_or(YoloClass::BattleStart)),
+                class_name,
                 confidence: max_conf,
             });
         }
@@ -831,10 +910,19 @@ impl YoloDetector {
         // 4. クラスごとに NMS を適用
         let detections = nms_per_class(raw_detections, self.iou_threshold);
 
-        log::debug!(
-            "[yolo] detect: {} detections (conf>{:.2})",
-            detections.len(), self.conf_threshold
-        );
+        // 診断ログ: 検出が 0 件のとき最大生確信度を表示して原因調査を助ける
+        if detections.is_empty() {
+            log::info!(
+                "[yolo] 0 detections: max_raw_conf={:.4} threshold={:.2} path={}",
+                max_conf_seen, self.conf_threshold,
+                self.model_path.file_name().unwrap_or_default().to_string_lossy()
+            );
+        } else {
+            log::debug!(
+                "[yolo] detect: {} detections (conf>{:.2}) max_raw={:.4}",
+                detections.len(), self.conf_threshold, max_conf_seen
+            );
+        }
         Ok(detections)
     }
 
@@ -919,9 +1007,9 @@ mod yolo_tests {
     #[test]
     fn test_yolo_class_from_id() {
         assert_eq!(YoloClass::from_id(0), Some(YoloClass::BattleStart));
-        assert_eq!(YoloClass::from_id(3), Some(YoloClass::Win));
-        assert_eq!(YoloClass::from_id(7), Some(YoloClass::MyArrow));
-        assert_eq!(YoloClass::from_id(9), Some(YoloClass::StageText));
+        assert_eq!(YoloClass::from_id(3), Some(YoloClass::KillLog));
+        assert_eq!(YoloClass::from_id(7), Some(YoloClass::RuleText));
+        assert_eq!(YoloClass::from_id(9), Some(YoloClass::Win));
         assert!(YoloClass::from_id(99).is_none());
     }
 

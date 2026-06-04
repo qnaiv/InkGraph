@@ -4,7 +4,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     ocr::ocr_from_file,
     state::AppState,
-    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo, YoloDebugResult, YoloDebugDetection},
+    types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo,
+            YoloDebugDetection, FullDebugResult},
 };
 
 // ---------------------------------------------------------------------------
@@ -101,64 +102,98 @@ pub async fn debug_capture(hwnd: u64) -> Result<CaptureDebugResult, String> {
     }
 }
 
-/// YOLO モデルの生検出結果を診断する。
-/// 信頼度 0.10 以上の全検出を返すため、通常の閾値 (0.70) 以下の候補も確認できる。
+/// Model 1 (YOLO) + Model 2 (カスケード) を 1 回のコマンドで実行する統合デバッグ。
+/// 信頼度 0.10 以上の全検出を返すため、通常の閾値以下の候補も確認できる。
 #[tauri::command]
-pub async fn debug_yolo(hwnd: u64) -> Result<YoloDebugResult, String> {
+pub async fn debug_full(hwnd: u64) -> Result<FullDebugResult, String> {
     #[cfg(target_os = "windows")]
     {
-        use crate::{capture::WindowCaptureSession, detector::YoloDetector};
+        use crate::{
+            cascade::StatsDetector,
+            detector::{YoloDetector, YoloClass},
+        };
 
-        let model_path = std::env::current_exe()
+        let result_model_path = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_result.onnx")))
             .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_result.onnx"));
+        let stats_model_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_stats.onnx")))
+            .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_stats.onnx"));
 
-        let mut yolo = YoloDetector::new(&model_path);
-        let load_result = tokio::task::block_in_place(|| yolo.load());
+        let mut yolo  = YoloDetector::new(&result_model_path);
+        let mut stats = StatsDetector::new(&stats_model_path);
 
-        if let Err(e) = load_result {
-            return Ok(YoloDebugResult {
+        if let Err(e) = tokio::task::block_in_place(|| yolo.load()) {
+            return Ok(FullDebugResult {
                 frame_w: 0, frame_h: 0,
-                model_loaded: false,
-                detections: vec![],
-                ocr: None,
-                error: Some(format!("モデルロード失敗: {e}")),
+                model1_loaded: false, model2_loaded: false,
+                detections: vec![], ocr: None,
+                arrow_found: false,
+                crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                crop_image_base64: None,
+                cascade_detections: vec![],
+                kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
+                paint: None, kill: None, death: None, special: None,
+                error: Some(format!("yolo_result.onnx ロード失敗: {e}")),
             });
         }
 
-        let session = tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd))
+        let model2_loaded = tokio::task::block_in_place(|| stats.load()).is_ok();
+
+        let session = tokio::task::block_in_place(|| crate::capture::WindowCaptureSession::new(hwnd))
             .map_err(|e| format!("WGC session failed: {e}"))?;
         let frame = get_frame_with_retry(&session).await
             .map_err(|e| format!("get_frame failed: {e}"))?;
 
         let (fw, fh) = (frame.width, frame.height);
-        let dets = tokio::task::block_in_place(|| yolo.detect_debug(&frame))
+
+        // Model 1: 閾値 0.10 で全候補取得 + OCR
+        let m1_dets = tokio::task::block_in_place(|| yolo.detect_debug(&frame))
             .map_err(|e| format!("YOLO detect failed: {e}"))?;
 
-        // 全フィールドの OCR デバッグ情報を収集
-        let ocr = tokio::task::block_in_place(|| crate::extractor::extract_debug_ocr(&frame, &dets));
+        let ocr = tokio::task::block_in_place(|| crate::extractor::extract_debug_ocr(&frame, &m1_dets));
 
-        let detections = dets.into_iter().map(|d| YoloDebugDetection {
-            class_name: d.class_name,
+        let detections: Vec<YoloDebugDetection> = m1_dets.iter().map(|d| YoloDebugDetection {
+            class_name: d.class_name.clone(),
             class_id:   d.class_id,
             confidence: d.confidence,
             x1: d.bbox.x1, y1: d.bbox.y1,
             x2: d.bbox.x2, y2: d.bbox.y2,
         }).collect();
 
-        Ok(YoloDebugResult {
+        // Model 2: カスケード (MyArrow 検出 → クロップ → stats 推論)
+        let arrow = YoloDetector::best_detection(&m1_dets, YoloClass::MyArrow);
+        let cascade = tokio::task::block_in_place(|| stats.run_cascade_debug(&frame, arrow));
+
+        Ok(FullDebugResult {
             frame_w: fw, frame_h: fh,
-            model_loaded: true,
+            model1_loaded: true,
+            model2_loaded,
             detections,
             ocr: Some(ocr),
-            error: None,
+            arrow_found: cascade.arrow_found,
+            crop_x: cascade.crop_x,
+            crop_y: cascade.crop_y,
+            crop_w: cascade.crop_w,
+            crop_h: cascade.crop_h,
+            crop_image_base64: cascade.crop_image_base64,
+            cascade_detections: cascade.detections,
+            kill_anchor_x: cascade.kill_anchor_x,
+            death_anchor_x: cascade.death_anchor_x,
+            special_anchor_x: cascade.special_anchor_x,
+            paint: cascade.paint,
+            kill:  cascade.kill,
+            death: cascade.death,
+            special: cascade.special,
+            error: cascade.error,
         })
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = hwnd;
-        Err("debug_yolo は Windows 専用です".to_string())
+        Err("debug_full は Windows 専用です".to_string())
     }
 }
 

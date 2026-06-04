@@ -11,6 +11,7 @@ export interface Match {
   kill_count: number | null;
   death_count: number | null;
   special_count: number | null;
+  paint_count: number | null;
   xp_after: number | null;
   gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う
@@ -98,6 +99,39 @@ export interface YoloDebugResult {
   model_loaded: boolean;
   detections: YoloDebugDetection[];
   ocr: OcrDebugResult | null;
+  error: string | null;
+}
+
+export interface CascadeDebugDetection {
+  class_name: string;
+  confidence: number;
+  x_center: number;
+  group: 'paint' | 'kill' | 'death' | 'special' | 'anchor_kill' | 'anchor_death' | 'anchor_special' | 'ignored';
+}
+
+export interface FullDebugResult {
+  frame_w: number;
+  frame_h: number;
+  // Model 1
+  model1_loaded: boolean;
+  detections: YoloDebugDetection[];
+  ocr: OcrDebugResult | null;
+  // Cascade / Model 2
+  model2_loaded: boolean;
+  arrow_found: boolean;
+  crop_x: number;
+  crop_y: number;
+  crop_w: number;
+  crop_h: number;
+  crop_image_base64: string | null;
+  cascade_detections: CascadeDebugDetection[];
+  kill_anchor_x: number | null;
+  death_anchor_x: number | null;
+  special_anchor_x: number | null;
+  paint: number | null;
+  kill: number | null;
+  death: number | null;
+  special: number | null;
   error: string | null;
 }
 

@@ -2,6 +2,7 @@
 
 pub mod capture;
 pub mod capture_loop;
+pub mod cascade;
 pub mod commands;
 pub mod db;
 pub mod detector;
@@ -15,7 +16,7 @@ pub mod types;
 use state::AppState;
 use commands::{
     debug_capture,
-    debug_yolo,
+    debug_full,
     list_windows,
     start_capture,
     stop_capture,
@@ -63,6 +64,18 @@ pub fn run() {
                         sql: include_str!("../migrations/005_add_gold_award.sql"),
                         kind: tauri_plugin_sql::MigrationKind::Up,
                     },
+                    tauri_plugin_sql::Migration {
+                        version: 6,
+                        description: "add paint_count column",
+                        sql: include_str!("../migrations/006_add_paint_count.sql"),
+                        kind: tauri_plugin_sql::MigrationKind::Up,
+                    },
+                    tauri_plugin_sql::Migration {
+                        version: 7,
+                        description: "fix result check constraint to allow in_progress and draw",
+                        sql: include_str!("../migrations/007_fix_result_constraint.sql"),
+                        kind: tauri_plugin_sql::MigrationKind::Up,
+                    },
                 ],
             )
             .build())
@@ -77,7 +90,7 @@ pub fn run() {
             start_capture,
             stop_capture,
             debug_capture,
-            debug_yolo,
+            debug_full,
         ])
         .run(tauri::generate_context!())
         .expect("error while running InkGraph");

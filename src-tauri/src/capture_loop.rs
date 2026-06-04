@@ -36,13 +36,14 @@ pub async fn run(app: AppHandle, state: AppState, hwnd: u64) {
 async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     use crate::{
         capture::WindowCaptureSession,
+        cascade::StatsDetector,
         db::{new_in_progress_match, new_match_from_ocr},
         detector::{pixel_result_check, YoloClass, YoloDetector, PANEL_BOUNDARY_Y},
         extractor::extract_from_yolo_detections,
         types::MatchDetectedPayload,
     };
 
-    // ── YOLO モデルをロード (失敗したらエラーで中断) ─────────────────────
+    // ── Model 1: YOLO モデルをロード (失敗したらエラーで中断) ───────────
     let model_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_result.onnx")))
@@ -57,6 +58,17 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
         return;
     }
     log::info!("[capture_loop] YOLO loaded: {}", model_path.display());
+
+    // ── Model 2: スタッツモデルをロード (失敗しても続行 — オプション) ───
+    let stats_model_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_stats.onnx")))
+        .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_stats.onnx"));
+    let mut stats_detector = StatsDetector::new(&stats_model_path);
+    match tokio::task::block_in_place(|| stats_detector.load()) {
+        Ok(_)  => log::info!("[capture_loop] stats model loaded: {}", stats_model_path.display()),
+        Err(e) => log::warn!("[capture_loop] yolo_stats not loaded (cascade disabled): {e}"),
+    }
 
     // ── WGC セッション作成 ─────────────────────────────────────────────────
     let session = match tokio::task::block_in_place(|| WindowCaptureSession::new(hwnd)) {
@@ -80,9 +92,24 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     // バトル開始後にリザルト誤検知を防ぐ冷却時間
     let mut battle_started_at: Option<Instant> = None;
     const RESULT_COOLDOWN_SECS: u64 = 15;
+    // リザルト未検知のまま放置された試合を強制リセットするタイムアウト。
+    // 通常のXマッチは最長でも10分程度のため、30分経過したら固着とみなす。
+    const STUCK_MATCH_TIMEOUT_SECS: u64 = 30 * 60;
 
     loop {
         if !*state.is_capturing.lock().await { break; }
+
+        // ── 固着チェック: pending_match_id が長時間クリアされなかった場合はリセット ─
+        if pending_match_id.is_some() {
+            let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            if elapsed >= STUCK_MATCH_TIMEOUT_SECS {
+                log::warn!(
+                    "[capture_loop] match stuck for {elapsed}s — resetting pending_match_id"
+                );
+                pending_match_id  = None;
+                battle_started_at = None;
+            }
+        }
 
         let frame = match tokio::task::block_in_place(|| session.get_frame()) {
             Ok(f) => f,
@@ -124,6 +151,20 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                     });
                 }
             } else {
+                // pending_match_id が設定中に BattleStart が再検知された場合はデバッグログ
+                if let Some(bs) = YoloDetector::best_detection(&dets, YoloClass::BattleStart) {
+                    if bs.confidence >= 0.60 {
+                        let elapsed = battle_started_at
+                            .map(|t| t.elapsed().as_secs())
+                            .unwrap_or(0);
+                        log::warn!(
+                            "[capture_loop] BattleStart detected (conf={:.2}) but already tracking \
+                             id={:?} (elapsed={elapsed}s) — skipping",
+                            bs.confidence, pending_match_id
+                        );
+                    }
+                }
+
                 // --- 冷却後に Win / Lose / Draw クラスでリザルト検知 ---
                 let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                 if elapsed >= RESULT_COOLDOWN_SECS {
@@ -161,13 +202,26 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                     };
 
                     if let Some(result_str) = result_opt {
-                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str)) {
+                        // カスケード推論 (Model 2): MyArrow が検出されていれば実行
+                        let cascade_stats = if stats_detector.is_loaded() {
+                            YoloDetector::best_detection(&dets, YoloClass::MyArrow)
+                                .and_then(|arrow| {
+                                    tokio::task::block_in_place(|| {
+                                        stats_detector.run_cascade(&frame, arrow).ok()
+                                    })
+                                })
+                        } else {
+                            None
+                        };
+
+                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str, cascade_stats)) {
                             Ok(data) => {
                                 let id = pending_match_id.take();
                                 battle_started_at = None;
                                 let match_record = new_match_from_ocr(
                                     id, &data.result,
                                     data.kill_count, data.death_count, data.special_count,
+                                    data.paint_count,
                                     data.xp_after, data.rule, data.stage, data.mode,
                                     data.gold_award_count,
                                 );
@@ -217,7 +271,9 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
     tokio::time::sleep(Duration::from_secs(3)).await;
     let result = new_match_from_ocr(
         Some(pending_id), "win",
-        Some(5), Some(1), Some(2), Some(2341.5),
+        Some(5), Some(1), Some(2),
+        None, // paint_count: スタブは None
+        Some(2341.5),
         Some("ガチエリア".to_string()),
         Some("マテガイ放水路".to_string()),
         Some("Xマッチ".to_string()),
