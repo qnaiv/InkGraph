@@ -16,8 +16,13 @@ use std::{cmp::Ordering, path::PathBuf};
 // 定数
 // ---------------------------------------------------------------------------
 
-/// MyArrow y_center の上下に確保するクロップ幅 (px)
-const CROP_HALF_H: u32 = 50;
+/// MyArrow bbox 高さに対するクロップ半径の比率。
+/// リザルト画面では矢印がプレイヤー行と同じ高さを持つため、
+/// 矢印高さを基準にすることで縮小表示時も適切なクロップ幅になる。
+const CROP_HALF_H_RATIO: f32 = 1.2;
+
+/// クロップ半径の最小値 (px)。矢印が極端に小さく検出された場合の下限。
+const CROP_HALF_H_MIN: u32 = 15;
 
 /// スタッツ領域の開始位置 (画面幅に対する比率)
 /// 塗りポイント〜SP カラムはすべてこの位置より右にある
@@ -68,6 +73,19 @@ pub struct PlayerStats {
 }
 
 // ---------------------------------------------------------------------------
+// ヘルパー
+// ---------------------------------------------------------------------------
+
+/// MyArrow の bbox 高さからクロップ半径を算出する。
+///
+/// 縮小表示（履歴閲覧など）でも矢印サイズに追従してクロップ幅が小さくなるため、
+/// モデルのストレッチ入力領域が学習時と同じアスペクト比を保てる。
+fn arrow_crop_half_h(arrow: &Detection, frame_h: u32) -> u32 {
+    let arrow_h_px = (arrow.bbox.y2 - arrow.bbox.y1) * frame_h as f32;
+    ((arrow_h_px * CROP_HALF_H_RATIO).round() as u32).max(CROP_HALF_H_MIN)
+}
+
+// ---------------------------------------------------------------------------
 // StatsDetector
 // ---------------------------------------------------------------------------
 
@@ -103,12 +121,14 @@ impl StatsDetector {
         frame: &CapturedFrame,
         arrow: &Detection,
     ) -> Result<PlayerStats> {
-        // Step 1: MyArrow y_center ±CROP_HALF_H px、STATS_X_START ≤ x ≤ STATS_X_END でクロップ
-        // 右側の余分な黒背景を除くことで、ストレッチ後のアイコン位置を学習データと一致させる
+        // Step 1: MyArrow y_center ± (矢印高さ×比率) でクロップ
+        // 固定値ではなく矢印サイズ基準にすることで、縮小表示時も学習時と同じ
+        // アスペクト比のクロップになり、ストレッチ後のアイコン位置がずれない。
+        let crop_half_h = arrow_crop_half_h(arrow, frame.height);
         let y_px =
             ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame.height as f32) as u32;
-        let crop_y = y_px.saturating_sub(CROP_HALF_H);
-        let crop_h = (CROP_HALF_H * 2).min(frame.height.saturating_sub(crop_y));
+        let crop_y = y_px.saturating_sub(crop_half_h);
+        let crop_h = (crop_half_h * 2).min(frame.height.saturating_sub(crop_y));
         let crop_x = (frame.width as f32 * STATS_X_START) as u32;
         let crop_right = ((frame.width as f32 * STATS_X_END) as u32).min(frame.width);
         let crop_w = crop_right.saturating_sub(crop_x);
@@ -119,7 +139,7 @@ impl StatsDetector {
         let mut dets = self.yolo.detect_bgra(&cropped, crop_w, crop_h)?;
 
         log::debug!(
-            "[cascade] crop=({crop_x},{crop_y},{crop_w}x{crop_h}), detections={}",
+            "[cascade] crop=({crop_x},{crop_y},{crop_w}x{crop_h}) half_h={crop_half_h}, detections={}",
             dets.len()
         );
 
@@ -284,10 +304,11 @@ impl StatsDetector {
             },
         };
 
-        // Step 1: クロップ（右側の余分な黒背景を除いて学習データと一致させる）
+        // Step 1: クロップ（矢印高さ基準で縦幅を動的算出）
+        let crop_half_h = arrow_crop_half_h(arrow, frame_h);
         let y_px = ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame_h as f32) as u32;
-        let crop_y = y_px.saturating_sub(CROP_HALF_H);
-        let crop_h = (CROP_HALF_H * 2).min(frame_h.saturating_sub(crop_y));
+        let crop_y = y_px.saturating_sub(crop_half_h);
+        let crop_h = (crop_half_h * 2).min(frame_h.saturating_sub(crop_y));
         let crop_x = (frame_w as f32 * STATS_X_START) as u32;
         let crop_right = ((frame_w as f32 * STATS_X_END) as u32).min(frame_w);
         let crop_w = crop_right.saturating_sub(crop_x);
