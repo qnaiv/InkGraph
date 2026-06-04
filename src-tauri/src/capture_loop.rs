@@ -92,9 +92,24 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     // バトル開始後にリザルト誤検知を防ぐ冷却時間
     let mut battle_started_at: Option<Instant> = None;
     const RESULT_COOLDOWN_SECS: u64 = 15;
+    // リザルト未検知のまま放置された試合を強制リセットするタイムアウト。
+    // 通常のXマッチは最長でも10分程度のため、30分経過したら固着とみなす。
+    const STUCK_MATCH_TIMEOUT_SECS: u64 = 30 * 60;
 
     loop {
         if !*state.is_capturing.lock().await { break; }
+
+        // ── 固着チェック: pending_match_id が長時間クリアされなかった場合はリセット ─
+        if pending_match_id.is_some() {
+            let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            if elapsed >= STUCK_MATCH_TIMEOUT_SECS {
+                log::warn!(
+                    "[capture_loop] match stuck for {elapsed}s — resetting pending_match_id"
+                );
+                pending_match_id  = None;
+                battle_started_at = None;
+            }
+        }
 
         let frame = match tokio::task::block_in_place(|| session.get_frame()) {
             Ok(f) => f,
@@ -136,6 +151,20 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                     });
                 }
             } else {
+                // pending_match_id が設定中に BattleStart が再検知された場合はデバッグログ
+                if let Some(bs) = YoloDetector::best_detection(&dets, YoloClass::BattleStart) {
+                    if bs.confidence >= 0.60 {
+                        let elapsed = battle_started_at
+                            .map(|t| t.elapsed().as_secs())
+                            .unwrap_or(0);
+                        log::warn!(
+                            "[capture_loop] BattleStart detected (conf={:.2}) but already tracking \
+                             id={:?} (elapsed={elapsed}s) — skipping",
+                            bs.confidence, pending_match_id
+                        );
+                    }
+                }
+
                 // --- 冷却後に Win / Lose / Draw クラスでリザルト検知 ---
                 let elapsed = battle_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                 if elapsed >= RESULT_COOLDOWN_SECS {
