@@ -17,9 +17,13 @@ use std::{cmp::Ordering, path::PathBuf};
 // ---------------------------------------------------------------------------
 
 /// MyArrow bbox 高さに対するクロップ半径の比率。
-/// リザルト画面では矢印がプレイヤー行と同じ高さを持つため、
-/// 矢印高さを基準にすることで縮小表示時も適切なクロップ幅になる。
-const CROP_HALF_H_RATIO: f32 = 1.2;
+///
+/// クロップ縦幅 = arrow_h_px × 2 × CROP_HALF_H_RATIO
+///             = arrow_h_px × 1.2 (20% マージン付きで 1 行分)
+///
+/// ratio=0.6 → crop_h ≈ 1.2 × arrow_h_px (矢印 BBox にぴったりフィット)
+/// ratio=1.2 → crop_h ≈ 2.4 × arrow_h_px (広すぎて隣接行が入り込む)
+const CROP_HALF_H_RATIO: f32 = 0.6;
 
 /// クロップ半径の最小値 (px)。矢印が極端に小さく検出された場合の下限。
 const CROP_HALF_H_MIN: u32 = 15;
