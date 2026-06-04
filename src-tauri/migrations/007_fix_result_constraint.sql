@@ -4,10 +4,6 @@
 -- battle_started 時の result='in_progress' INSERT が常に失敗していた。
 -- SQLite は既存カラムの CHECK 制約を直接変更できないため、テーブルを再作成する。
 
-PRAGMA foreign_keys=off;
-
-BEGIN TRANSACTION;
-
 CREATE TABLE matches_new (
     id               TEXT     PRIMARY KEY,
     played_at        DATETIME NOT NULL,
@@ -43,7 +39,3 @@ CREATE INDEX IF NOT EXISTS idx_matches_played_at ON matches(played_at);
 CREATE INDEX IF NOT EXISTS idx_matches_rule      ON matches(rule);
 CREATE INDEX IF NOT EXISTS idx_matches_result    ON matches(result);
 CREATE INDEX IF NOT EXISTS idx_matches_mode      ON matches(mode);
-
-COMMIT;
-
-PRAGMA foreign_keys=on;
