@@ -44,6 +44,9 @@ const STATS_X_END: f32 = 0.86;
 /// 0.015 は広すぎて隣接する別桁 (間隔 0.012 程度) まで同一扱いしてしまう。
 const X_DEDUP_TOL: f32 = 0.008;
 
+/// ヘッダークロップ: フレーム高さに対するクロップ範囲 (y=0 から下端まで)
+const HEADER_CROP_H_RATIO: f32 = 0.14;
+
 // ---------------------------------------------------------------------------
 // Model 2 クラス名
 // ---------------------------------------------------------------------------
@@ -51,19 +54,18 @@ const X_DEDUP_TOL: f32 = 0.008;
 /// Model 2 のクラス名一覧。
 /// Roboflow の data.yaml アルファベット順と一致させること。
 pub const STATS_CLASS_NAMES: &[&str] = &[
-    "digit_0",
-    "digit_1",
-    "digit_2",
-    "digit_3",
-    "digit_4",
-    "digit_5",
-    "digit_6",
-    "digit_7",
-    "digit_8",
-    "digit_9",
-    "icon_death",
-    "icon_kill",
-    "icon_special",
+    "digit_0", "digit_1", "digit_2", "digit_3", "digit_4",
+    "digit_5", "digit_6", "digit_7", "digit_8", "digit_9",
+    "icon_death", "icon_kill", "icon_special",
+    "mode_challenge", "mode_open", "mode_regular", "mode_x",
+    "rule_area", "rule_asari", "rule_hoko", "rule_nawabari", "rule_yagura",
+    "stage_amabi", "stage_baigai", "stage_chozame", "stage_dekarain",
+    "stage_gonzui", "stage_hirame", "stage_kajiki", "stage_kinmedai",
+    "stage_konbu", "stage_kusaya", "stage_mahimahi", "stage_manta",
+    "stage_masaba", "stage_mategai", "stage_namerou", "stage_nanpura",
+    "stage_negitoro", "stage_ohyou", "stage_ryuuguu", "stage_sumeshi",
+    "stage_takaashi", "stage_taraport", "stage_yagara", "stage_yunohana",
+    "stage_zatou",
 ];
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,14 @@ pub struct PlayerStats {
     pub kill:    Option<i64>,
     pub death:   Option<i64>,
     pub special: Option<i64>,
+}
+
+/// ヘッダー部 YOLO 推論で得られたモード/ルール/ステージ
+#[derive(Debug, Clone)]
+pub struct HeaderInfo {
+    pub mode:  Option<String>,
+    pub rule:  Option<String>,
+    pub stage: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +169,39 @@ impl StatsDetector {
         // Steps 3–4: アンカー特定 → クラスタリング → パース
         // dets は detect_bgra 時点で 0.50 フィルタ済みなので digit_min_conf=0.0 でよい
         Ok(cluster_and_parse(&dets, 0.0))
+    }
+
+    /// ヘッダー部（画面上部 HEADER_CROP_H_RATIO）をクロップして yolo_stats で推論し、
+    /// 最高確信度のモード/ルール/ステージクラスを返す。
+    pub fn run_header_cascade(&mut self, frame: &CapturedFrame) -> Result<HeaderInfo> {
+        let crop_h = (frame.height as f32 * HEADER_CROP_H_RATIO).round() as u32;
+        let cropped = crop_bgra(&frame.bgra, frame.width, 0, 0, frame.width, crop_h);
+        let dets = self.yolo.detect_bgra(&cropped, frame.width, crop_h)?;
+
+        log::debug!(
+            "[cascade] header crop h={crop_h}, detections={}",
+            dets.len()
+        );
+
+        let best_in_group = |prefix: &str| -> Option<String> {
+            dets.iter()
+                .filter(|d| STATS_CLASS_NAMES.get(d.class_id).map(|n| n.starts_with(prefix)).unwrap_or(false))
+                .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
+                .and_then(|d| STATS_CLASS_NAMES.get(d.class_id).copied())
+                .and_then(|class_name| {
+                    if prefix == "mode_"       { mode_class_to_db(class_name).map(str::to_string) }
+                    else if prefix == "rule_"  { rule_class_to_db(class_name).map(str::to_string) }
+                    else                       { stage_class_to_db(class_name).map(str::to_string) }
+                })
+        };
+
+        let mode  = best_in_group("mode_");
+        let rule  = best_in_group("rule_");
+        let stage = best_in_group("stage_");
+
+        log::debug!("[cascade] header: mode={:?} rule={:?} stage={:?}", mode, rule, stage);
+
+        Ok(HeaderInfo { mode, rule, stage })
     }
 }
 
@@ -420,6 +463,62 @@ fn assign_group(
     else if death_lo.map_or(true, |dx| cx < dx) { "kill".to_string() }
     else if special_lo.map_or(true, |sx| cx < sx) { "death".to_string() }
     else { "special".to_string() }
+}
+
+// ---------------------------------------------------------------------------
+// クラス名 → DB 値マッピング
+// ---------------------------------------------------------------------------
+
+pub fn mode_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "mode_x"         => Some("Xマッチ"),
+        "mode_regular"   => Some("レギュラーマッチ"),
+        "mode_challenge" => Some("バンカラマッチ(チャレンジ)"),
+        "mode_open"      => Some("バンカラマッチ(オープン)"),
+        _ => None,
+    }
+}
+
+pub fn rule_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "rule_area"     => Some("ガチエリア"),
+        "rule_asari"    => Some("ガチアサリ"),
+        "rule_hoko"     => Some("ガチホコ"),
+        "rule_nawabari" => Some("ナワバリバトル"),
+        "rule_yagura"   => Some("ガチヤグラ"),
+        _ => None,
+    }
+}
+
+pub fn stage_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "stage_yunohana"  => Some("ユノハナ大渓谷"),
+        "stage_gonzui"    => Some("ゴンズイ地区"),
+        "stage_yagara"    => Some("ヤガラ市場"),
+        "stage_mategai"   => Some("マテガイ放水路"),
+        "stage_namerou"   => Some("ナメロウ金属"),
+        "stage_nanpura"   => Some("ナンプラー遺跡"),
+        "stage_kusaya"    => Some("クサヤ温泉"),
+        "stage_hirame"    => Some("ヒラメが丘団地"),
+        "stage_masaba"    => Some("マサバ海峡大橋"),
+        "stage_sumeshi"   => Some("スメーシーワールド"),
+        "stage_kinmedai"  => Some("キンメダイ美術館"),
+        "stage_taraport"  => Some("タラポートショッピングパーク"),
+        "stage_baigai"    => Some("バイガイ亭"),
+        "stage_amabi"     => Some("海女美術大学"),
+        "stage_chozame"   => Some("チョウザメ造船"),
+        "stage_zatou"     => Some("ザトウマーケット"),
+        "stage_ryuuguu"   => Some("リュウグウターミナル"),
+        "stage_ohyou"     => Some("オヒョウ海運"),
+        "stage_kajiki"    => Some("カジキ空港"),
+        "stage_negitoro"  => Some("ネギトロ炭鉱"),
+        "stage_dekarain"  => Some("デカライン高架下"),
+        "stage_konbu"     => Some("コンブトラック"),
+        "stage_mahimahi"  => Some("マヒマヒリゾート&スパ"),
+        "stage_manta"     => Some("マンタマリア号"),
+        "stage_takaashi"  => Some("タカアシ経済特区"),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

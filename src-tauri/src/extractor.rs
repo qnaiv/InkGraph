@@ -27,21 +27,18 @@ use anyhow::Result;
 ///
 /// `result`: capture_loop が MyPlayerRow の y 座標から判定した "win" / "lose" 文字列。
 /// `stats_override`: カスケード推論 (Model 2) で取得したスタッツ。Some の場合は OCR 抽出を上書きする。
-/// BBox が検出されなかった項目は `None` を返す (OCR 失敗扱い)。
+/// `header_override`: ヘッダー部 YOLO 推論で取得したモード/ルール/ステージ。
 /// 呼び出し元は `tokio::task::block_in_place` でラップすること (OCR がブロッキング)。
 pub fn extract_from_yolo_detections(
-    frame:          &CapturedFrame,
-    detections:     &[Detection],
-    result:         &str,                                  // "win" | "lose"
-    stats_override: Option<crate::cascade::PlayerStats>,  // カスケード結果
+    frame:           &CapturedFrame,
+    detections:      &[Detection],
+    result:          &str,                                   // "win" | "lose"
+    stats_override:  Option<crate::cascade::PlayerStats>,   // カスケード結果
+    header_override: Option<crate::cascade::HeaderInfo>,    // ヘッダー YOLO 結果
 ) -> Result<ExtractedMatchData> {
-    // ルール・ステージ・モード: BBox クロップ → 白文字抽出 → OCR → 正規化
-    let rule  = extract_ocr_from_class(frame, detections, YoloClass::RuleText,  "ja-JP")
-        .and_then(|t| normalize_rule(&t));
-    let stage = extract_ocr_from_class(frame, detections, YoloClass::StageText, "ja-JP")
-        .and_then(|t| normalize_stage(&t));
-    let mode  = extract_ocr_from_class(frame, detections, YoloClass::ModeText,  "ja-JP")
-        .and_then(|t| normalize_mode(&t));
+    let rule  = header_override.as_ref().and_then(|h| h.rule.clone());
+    let stage = header_override.as_ref().and_then(|h| h.stage.clone());
+    let mode  = header_override.as_ref().and_then(|h| h.mode.clone());
 
     // KDA + 塗りポイント: カスケード結果があればそちらを優先、なければ固定列 OCR にフォールバック
     let (kill_count, death_count, special_count, paint_count) =
@@ -72,30 +69,6 @@ pub fn extract_from_yolo_detections(
         stage,
         gold_award_count: Some(gold_award_count),
     })
-}
-
-/// 指定クラスの最高確信度 BBox をクロップして白文字 OCR し生テキストを返す。
-fn extract_ocr_from_class(
-    frame:      &CapturedFrame,
-    detections: &[Detection],
-    class:      YoloClass,
-    lang:       &str,
-) -> Option<String> {
-    let det = YoloDetector::best_detection(detections, class)?;
-
-    let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
-    let y1 = (det.bbox.y1 * frame.height as f32) as u32;
-    let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
-    let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
-    let w  = x2.saturating_sub(x1).max(1);
-    let h  = y2.saturating_sub(y1).max(1);
-
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
-    let text = ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()?.text;
-    let trimmed = text.trim().to_string();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +273,7 @@ pub fn normalize_stage(raw: &str) -> Option<String> {
         "チョウザメ造船", "ザトウマーケット", "リュウグウターミナル",
         "オヒョウ海運", "カジキ空港",
         "ネギトロ炭鉱", "ショッツル鉱山", "デカライン高架下",
+        "コンブトラック", "マヒマヒリゾート&スパ", "マンタマリア号", "タカアシ経済特区",
     ];
     // 完全一致（高速パス）
     for s in STAGES {
@@ -410,23 +384,6 @@ fn roi_to_raw_debug(frame: &CapturedFrame, roi: &Roi, lang: &str, label: &str) -
     save_debug_png(&format!("{label}_2white"), &preprocessed, w, h);
     let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
     save_debug_png(&format!("{label}_3upscale"), &upscaled, uw, uh);
-    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
-        .map(|r| r.text.trim().to_string())
-        .unwrap_or_default()
-}
-
-/// BBox クロップ → 白文字抽出 → OCR 生テキスト。検出なければ空文字。
-fn bbox_to_raw_text(frame: &CapturedFrame, detections: &[Detection], class: YoloClass, lang: &str) -> String {
-    let Some(det) = YoloDetector::best_detection(detections, class) else { return String::new(); };
-    let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
-    let y1 = (det.bbox.y1 * frame.height as f32) as u32;
-    let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
-    let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
-    let w  = x2.saturating_sub(x1).max(1);
-    let h  = y2.saturating_sub(y1).max(1);
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
     ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
         .map(|r| r.text.trim().to_string())
         .unwrap_or_default()

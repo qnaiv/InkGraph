@@ -203,18 +203,19 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
 
                     if let Some(result_str) = result_opt {
                         // カスケード推論 (Model 2): MyArrow が検出されていれば実行
-                        let cascade_stats = if stats_detector.is_loaded() {
-                            YoloDetector::best_detection(&dets, YoloClass::MyArrow)
-                                .and_then(|arrow| {
-                                    tokio::task::block_in_place(|| {
-                                        stats_detector.run_cascade(&frame, arrow).ok()
-                                    })
+                        let cascade_stats = YoloDetector::best_detection(&dets, YoloClass::MyArrow)
+                            .and_then(|arrow| {
+                                tokio::task::block_in_place(|| {
+                                    stats_detector.run_cascade(&frame, arrow).ok()
                                 })
-                        } else {
-                            None
-                        };
+                            });
 
-                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str, cascade_stats)) {
+                        // ヘッダー部 YOLO 推論: モード/ルール/ステージをクラス検出で取得
+                        let header_info = tokio::task::block_in_place(|| {
+                            stats_detector.run_header_cascade(&frame).ok()
+                        });
+
+                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str, cascade_stats, header_info)) {
                             Ok(data) => {
                                 let id = pending_match_id.take();
                                 battle_started_at = None;
