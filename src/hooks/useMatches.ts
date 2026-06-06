@@ -7,9 +7,6 @@ import {
   selectMatches,
   insertMatch,
   updateMatchResult,
-  dbUpdateWeapon,
-  dbUpdateTags,
-  dbUpdateNote,
   dbUpdateFullMatch,
   dbDeleteMatch,
 } from '../lib/db';
@@ -23,7 +20,7 @@ function parseMatch(raw: RawMatch): Match {
   if (raw.tags) {
     try { tags = JSON.parse(raw.tags); } catch { tags = []; }
   }
-  return { ...raw, tags };
+  return { ...raw, tags, auto_recorded: Boolean(raw.auto_recorded) };
 }
 
 // ---------------------------------------------------------------------------
@@ -37,9 +34,6 @@ interface UseMatchesReturn {
   addMatch:     (raw: RawMatch) => Promise<void>;
   updateMatch:  (raw: RawMatch) => Promise<void>;
   deleteMatch:  (id: string) => Promise<void>;
-  updateWeapon: (id: string, weapon: string) => Promise<void>;
-  updateTags:   (id: string, tags: string[]) => Promise<void>;
-  updateNote:   (id: string, note: string)   => Promise<void>;
 }
 
 export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
@@ -76,7 +70,7 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
       const fn1 = await listen<MatchDetectedPayload>('battle_started', async (event) => {
         const raw = event.payload.match_data;
         try {
-          await insertMatch(raw);
+          await insertMatch(raw, true);
         } catch (e) {
           console.error('[useMatches] insertMatch(in_progress) failed:', e);
         }
@@ -116,7 +110,7 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
 
   // ── 手動追加 ─────────────────────────────────────────────────
   const addMatch = useCallback(async (raw: RawMatch) => {
-    await insertMatch(raw);
+    await insertMatch(raw, false);
     setMatches((prev) => [parseMatch(raw), ...prev]);
   }, []);
 
@@ -132,21 +126,5 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
-  // ── 更新操作 ─────────────────────────────────────────────────
-  const updateWeapon = useCallback(async (id: string, weapon: string) => {
-    await dbUpdateWeapon(id, weapon);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, weapon } : m)));
-  }, []);
-
-  const updateTags = useCallback(async (id: string, tags: string[]) => {
-    await dbUpdateTags(id, tags);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, tags } : m)));
-  }, []);
-
-  const updateNote = useCallback(async (id: string, note: string) => {
-    await dbUpdateNote(id, note);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, note } : m)));
-  }, []);
-
-  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, updateWeapon, updateTags, updateNote };
+  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch };
 }

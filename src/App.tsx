@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Header } from './components/Header';
 import { XpChart } from './components/XpChart';
-import { MatchList } from './components/MatchList';
 import { ManualEntryModal } from './components/ManualEntryModal';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { MatchHistoryPage } from './components/MatchHistoryPage';
@@ -22,8 +21,7 @@ export default function App() {
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
-  const { matches, isLoading, error, addMatch, updateMatch, deleteMatch, updateWeapon, updateTags, updateNote } =
-    useMatches(selectedRule);
+  const { matches, error, addMatch, updateMatch } = useMatches(selectedRule);
 
   const handleEditSubmit = async (raw: RawMatch) => {
     await updateMatch(raw);
@@ -86,40 +84,12 @@ export default function App() {
             ) : (
               <MatchHistoryPage
                 onEdit={handleOpenEdit}
+                onAddNew={() => setShowManualEntry(true)}
                 refreshKey={historyRefreshKey}
               />
             )}
           </div>
         </main>
-
-        {/* サイドバー: 試合リスト */}
-        <aside className="w-80 bg-slate-800/40 border-l border-slate-700 flex flex-col">
-          <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
-            <h2 className="text-sm font-medium text-slate-300">
-              直近の試合
-              {matches.length > 0 && (
-                <span className="ml-2 text-xs text-slate-500">({matches.length}件)</span>
-              )}
-            </h2>
-            <button
-              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors"
-              onClick={() => setShowManualEntry(true)}
-            >
-              + 手動入力
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 py-3">
-            <MatchList
-              matches={matches}
-              isLoading={isLoading}
-              onUpdateWeapon={updateWeapon}
-              onUpdateTags={updateTags}
-              onUpdateNote={updateNote}
-              onEdit={handleOpenEdit}
-              onDelete={deleteMatch}
-            />
-          </div>
-        </aside>
       </div>
 
       {/* 手動入力モーダル */}

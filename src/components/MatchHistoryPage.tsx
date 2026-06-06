@@ -10,18 +10,20 @@ function parseMatch(raw: RawMatch): Match {
   if (raw.tags) {
     try { tags = JSON.parse(raw.tags); } catch { tags = []; }
   }
-  return { ...raw, tags };
+  return { ...raw, tags, auto_recorded: Boolean(raw.auto_recorded) };
 }
 
 type ResultFilter = 'all' | 'win' | 'lose';
 
 interface Props {
   onEdit: (match: Match) => void;
+  /** 「+ 手動入力」ボタン押下時に呼ばれる */
+  onAddNew: () => void;
   /** 更新時にインクリメントされると一覧を再取得する */
   refreshKey: number;
 }
 
-export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
+export function MatchHistoryPage({ onEdit, onAddNew, refreshKey }: Props) {
   const [allMatches, setAllMatches] = useState<Match[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
@@ -117,6 +119,14 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
             </span>
           )}
         </div>
+
+        {/* 手動入力 */}
+        <button
+          className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
+          onClick={onAddNew}
+        >
+          + 手動入力
+        </button>
       </div>
 
       {/* テーブルヘッダー */}
@@ -167,10 +177,13 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
     match.special_count != null ? match.special_count : null,
   ].map((v) => (v != null ? String(v) : '-')).join('/');
 
+  // キャプチャによる自動認識のまま、まだ編集ダイアログで確定保存されていないレコード
+  const isUnconfirmed = match.auto_recorded && match.result !== 'in_progress';
+
   return (
     <div
       className={`grid grid-cols-[80px_90px_90px_1fr_1fr_90px_100px_32px_32px] gap-x-2 px-3 py-2 text-xs border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors items-center ${
-        match.result === 'in_progress' ? 'opacity-60' : ''
+        match.result === 'in_progress' ? 'opacity-60' : isUnconfirmed ? 'opacity-70' : ''
       }`}
     >
       {/* 勝敗 */}
@@ -181,7 +194,7 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
           </span>
         </span>
       ) : (
-        <span className="inline-flex justify-center">
+        <span className="inline-flex flex-col items-center gap-0.5">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
             match.result === 'win'
               ? 'bg-green-500/20 text-green-400 border border-green-500/40'
@@ -189,6 +202,14 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
           }`}>
             {match.result === 'win' ? 'WIN' : 'LOSE'}
           </span>
+          {isUnconfirmed && (
+            <span
+              className="text-[8px] font-semibold px-1 leading-tight rounded bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              title="キャプチャによる自動認識のため、編集して保存するまでは未確定です"
+            >
+              未確定
+            </span>
+          )}
         </span>
       )}
 

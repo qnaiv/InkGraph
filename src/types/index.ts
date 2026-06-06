@@ -16,6 +16,8 @@ export interface Match {
   gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う
   note: string | null;
+  /** キャプチャによる自動認識で作成され、まだ編集ダイアログで確定保存されていないか */
+  auto_recorded: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -25,9 +27,10 @@ export interface MatchDetectedPayload {
   ocr_confidence: number;
 }
 
-/** Rust から届く生データ (tags が JSON 文字列) */
-export interface RawMatch extends Omit<Match, 'tags'> {
+/** Rust から届く生データ (tags が JSON 文字列、auto_recorded が無い場合がある) */
+export interface RawMatch extends Omit<Match, 'tags' | 'auto_recorded'> {
   tags: string | null; // JSON 配列文字列
+  auto_recorded?: number; // SQLite からは 0 / 1 の数値で返る
 }
 
 export interface WindowInfo {
