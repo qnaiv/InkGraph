@@ -44,8 +44,15 @@ const STATS_X_END: f32 = 0.86;
 /// 0.015 は広すぎて隣接する別桁 (間隔 0.012 程度) まで同一扱いしてしまう。
 const X_DEDUP_TOL: f32 = 0.008;
 
-/// ヘッダークロップ: フレーム高さに対するクロップ範囲 (y=0 から下端まで)
-const HEADER_CROP_H_RATIO: f32 = 0.14;
+/// ヘッダークロップ範囲 (フレーム比率)。
+///
+/// リザルト画面右上部の「モード/ルール/ステージ」表示エリアを切り出す。
+/// 値は既存の RULE_ROI (x=0.450-0.570) / STAGE_ROI (x=0.545-0.785) を参考にした概算値。
+/// 実機でデバッグ画面のクロップ画像を見ながら、この4定数を調整すること。
+const HEADER_CROP_X_START: f32 = 0.30;
+const HEADER_CROP_X_END:   f32 = 0.80;
+const HEADER_CROP_Y_START: f32 = 0.04;
+const HEADER_CROP_Y_END:   f32 = 0.13;
 
 // ---------------------------------------------------------------------------
 // Model 2 クラス名
@@ -171,37 +178,51 @@ impl StatsDetector {
         Ok(cluster_and_parse(&dets, 0.0))
     }
 
-    /// ヘッダー部（画面上部 HEADER_CROP_H_RATIO）をクロップして yolo_stats で推論し、
+    /// ヘッダー部（モード/ルール/ステージ表示エリア）をクロップして yolo_stats で推論し、
     /// 最高確信度のモード/ルール/ステージクラスを返す。
     pub fn run_header_cascade(&mut self, frame: &CapturedFrame) -> Result<HeaderInfo> {
-        let crop_h = (frame.height as f32 * HEADER_CROP_H_RATIO).round() as u32;
-        let cropped = crop_bgra(&frame.bgra, frame.width, 0, 0, frame.width, crop_h);
-        let dets = self.yolo.detect_bgra(&cropped, frame.width, crop_h)?;
+        let (crop_x, crop_y, crop_w, crop_h) = header_crop_rect(frame.width, frame.height);
+        let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
+        let dets = self.yolo.detect_bgra(&cropped, crop_w, crop_h)?;
 
         log::debug!(
-            "[cascade] header crop h={crop_h}, detections={}",
+            "[cascade] header crop=({crop_x},{crop_y},{crop_w}x{crop_h}), detections={}",
             dets.len()
         );
 
-        let best_in_group = |prefix: &str| -> Option<String> {
-            dets.iter()
-                .filter(|d| STATS_CLASS_NAMES.get(d.class_id).map(|n| n.starts_with(prefix)).unwrap_or(false))
-                .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
-                .and_then(|d| STATS_CLASS_NAMES.get(d.class_id).copied())
-                .and_then(|class_name| {
-                    if prefix == "mode_"       { mode_class_to_db(class_name).map(str::to_string) }
-                    else if prefix == "rule_"  { rule_class_to_db(class_name).map(str::to_string) }
-                    else                       { stage_class_to_db(class_name).map(str::to_string) }
-                })
-        };
+        let info = header_info_from_detections(&dets);
+        log::debug!("[cascade] header: mode={:?} rule={:?} stage={:?}", info.mode, info.rule, info.stage);
+        Ok(info)
+    }
+}
 
-        let mode  = best_in_group("mode_");
-        let rule  = best_in_group("rule_");
-        let stage = best_in_group("stage_");
+/// ヘッダークロップ矩形 (crop_x, crop_y, crop_w, crop_h) をピクセル単位で算出する。
+fn header_crop_rect(frame_w: u32, frame_h: u32) -> (u32, u32, u32, u32) {
+    let crop_x = (frame_w as f32 * HEADER_CROP_X_START) as u32;
+    let crop_y = (frame_h as f32 * HEADER_CROP_Y_START) as u32;
+    let right  = ((frame_w as f32 * HEADER_CROP_X_END) as u32).min(frame_w);
+    let bottom = ((frame_h as f32 * HEADER_CROP_Y_END) as u32).min(frame_h);
+    (crop_x, crop_y, right.saturating_sub(crop_x), bottom.saturating_sub(crop_y))
+}
 
-        log::debug!("[cascade] header: mode={:?} rule={:?} stage={:?}", mode, rule, stage);
+/// 検出結果からモード/ルール/ステージそれぞれの最高確信度クラスを DB 表記に変換する。
+fn header_info_from_detections(dets: &[Detection]) -> HeaderInfo {
+    let best_in_group = |prefix: &str| -> Option<String> {
+        dets.iter()
+            .filter(|d| STATS_CLASS_NAMES.get(d.class_id).map(|n| n.starts_with(prefix)).unwrap_or(false))
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
+            .and_then(|d| STATS_CLASS_NAMES.get(d.class_id).copied())
+            .and_then(|class_name| {
+                if prefix == "mode_"       { mode_class_to_db(class_name).map(str::to_string) }
+                else if prefix == "rule_"  { rule_class_to_db(class_name).map(str::to_string) }
+                else                       { stage_class_to_db(class_name).map(str::to_string) }
+            })
+    };
 
-        Ok(HeaderInfo { mode, rule, stage })
+    HeaderInfo {
+        mode:  best_in_group("mode_"),
+        rule:  best_in_group("rule_"),
+        stage: best_in_group("stage_"),
     }
 }
 
@@ -425,6 +446,49 @@ impl StatsDetector {
             death:   stats.death,
             special: stats.special,
             error:   None,
+        }
+    }
+
+    /// ヘッダーカスケード推論の中間状態を含む診断結果を返す。
+    /// クロップ画像・全候補検出（閾値 0.10）・最終的なモード/ルール/ステージを含む。
+    pub fn run_header_cascade_debug(&mut self, frame: &CapturedFrame) -> crate::types::HeaderDebugResult {
+        use crate::types::{HeaderDebugDetection, HeaderDebugResult};
+        let (frame_w, frame_h) = (frame.width, frame.height);
+
+        let (crop_x, crop_y, crop_w, crop_h) = header_crop_rect(frame_w, frame_h);
+        let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
+        let crop_image_base64 = encode_crop_base64(&cropped, crop_w, crop_h);
+
+        let dets = match self.yolo.detect_debug_bgra(&cropped, crop_w, crop_h) {
+            Ok(d) => d,
+            Err(e) => return HeaderDebugResult {
+                frame_w, frame_h,
+                crop_x, crop_y, crop_w, crop_h,
+                crop_image_base64,
+                detections: vec![],
+                mode: None, rule: None, stage: None,
+                error: Some(format!("Model 2 推論エラー: {e}")),
+            },
+        };
+
+        let info = header_info_from_detections(&dets);
+
+        // 確信度降順 (デバッグ表示用)
+        let mut sorted = dets;
+        sorted.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(Ordering::Equal));
+        let debug_dets: Vec<HeaderDebugDetection> = sorted.iter().map(|d| HeaderDebugDetection {
+            class_name: d.class_name.clone(),
+            confidence: d.confidence,
+            x_center:   (d.bbox.x1 + d.bbox.x2) / 2.0,
+        }).collect();
+
+        HeaderDebugResult {
+            frame_w, frame_h,
+            crop_x, crop_y, crop_w, crop_h,
+            crop_image_base64,
+            detections: debug_dets,
+            mode: info.mode, rule: info.rule, stage: info.stage,
+            error: None,
         }
     }
 }
