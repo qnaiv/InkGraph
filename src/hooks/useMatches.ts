@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getLastWeaponName } from '../assets/weapons';
 import type { Match, MatchDetectedPayload, RawMatch, Rule } from '../types';
 import {
   selectMatches,
@@ -68,7 +69,8 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     async function setup() {
       // Phase 1: バトル開始 → "in_progress" レコードを追加
       const fn1 = await listen<MatchDetectedPayload>('battle_started', async (event) => {
-        const raw = event.payload.match_data;
+        // ブキはキャプチャでは認識できないため、未入力なら前回使用したブキを補完する
+        const raw: RawMatch = { ...event.payload.match_data, weapon: event.payload.match_data.weapon ?? getLastWeaponName() };
         try {
           await insertMatch(raw, true);
         } catch (e) {

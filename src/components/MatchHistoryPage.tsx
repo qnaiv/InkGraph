@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { selectAllMatches, dbDeleteMatch } from '../lib/db';
+import { getLastWeaponName } from '../assets/weapons';
 import { RULES } from '../types';
 import type { Match, MatchDetectedPayload, RawMatch } from '../types';
 
@@ -51,7 +52,8 @@ export function MatchHistoryPage({ onEdit, onAddNew, refreshKey }: Props) {
     async function setup() {
       // バトル開始 → "in_progress" 行を一覧の先頭に追加
       const fn1 = await listen<MatchDetectedPayload>('battle_started', (event) => {
-        const raw = event.payload.match_data;
+        // ブキはキャプチャでは認識できないため、未入力なら前回使用したブキを補完する (useMatches 側と表示を揃える)
+        const raw: RawMatch = { ...event.payload.match_data, weapon: event.payload.match_data.weapon ?? getLastWeaponName() };
         setAllMatches((prev) => [parseMatch(raw), ...prev]);
       });
       if (cancelled) { fn1(); return; }
@@ -168,14 +170,18 @@ export function MatchHistoryPage({ onEdit, onAddNew, refreshKey }: Props) {
       </div>
 
       {/* テーブルヘッダー */}
-      <div className="grid grid-cols-[80px_90px_90px_1fr_1fr_90px_100px_40px] gap-x-2 px-3 py-1.5 text-[10px] text-slate-500 font-medium uppercase tracking-wide border-b border-slate-700 shrink-0">
+      <div className="grid grid-cols-[76px_88px_104px_76px_1fr_1fr_72px_56px_64px_56px_32px_32px] gap-x-2 px-3 py-1.5 text-[10px] text-slate-500 font-medium uppercase tracking-wide border-b border-slate-700 shrink-0">
         <span>勝敗</span>
         <span>日時</span>
+        <span>モード</span>
         <span>ルール</span>
         <span>ステージ</span>
         <span>ブキ</span>
         <span className="text-center">K/D/S</span>
+        <span className="text-right">ぬり</span>
         <span className="text-right">XP</span>
+        <span className="text-right">金イクラ</span>
+        <span></span>
         <span></span>
       </div>
 
@@ -217,13 +223,16 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
 
   // キャプチャによる自動認識のまま、まだ編集ダイアログで確定保存されていないレコード
   const isUnconfirmed = match.auto_recorded && match.result !== 'in_progress';
+  const hasExtra = match.tags.length > 0 || !!match.note;
 
   return (
     <div
-      className={`grid grid-cols-[80px_90px_90px_1fr_1fr_90px_100px_32px_32px] gap-x-2 px-3 py-2 text-xs border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors items-center ${
+      className={`border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors ${
         match.result === 'in_progress' ? 'opacity-60' : isUnconfirmed ? 'opacity-70' : ''
       }`}
     >
+    <div className="grid grid-cols-[76px_88px_104px_76px_1fr_1fr_72px_56px_64px_56px_32px_32px] gap-x-2 px-3 py-2 text-xs items-center">
+
       {/* 勝敗 */}
       {match.result === 'in_progress' ? (
         <span className="inline-flex justify-center">
@@ -254,6 +263,9 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
       {/* 日時 */}
       <span className="text-slate-500 text-[10px]">{dateStr}</span>
 
+      {/* モード */}
+      <span className="text-slate-400 truncate">{match.mode ?? '—'}</span>
+
       {/* ルール */}
       <span className="text-slate-300 truncate">{match.rule ?? '—'}</span>
 
@@ -266,9 +278,19 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
       {/* K/D/S */}
       <span className="text-slate-400 font-mono text-center text-[10px]">{kda}</span>
 
+      {/* ぬり */}
+      <span className="font-mono text-right text-[11px] text-slate-400">
+        {match.paint_count != null ? match.paint_count : '—'}
+      </span>
+
       {/* XP */}
       <span className={`font-mono text-right text-[11px] ${match.xp_after != null ? 'text-indigo-300' : 'text-slate-600'}`}>
         {match.xp_after != null ? match.xp_after.toFixed(1) : '—'}
+      </span>
+
+      {/* 金イクラ */}
+      <span className="font-mono text-right text-[11px] text-amber-300/80">
+        {match.gold_award_count != null ? match.gold_award_count : '—'}
       </span>
 
       {/* 編集 / 削除ボタン (削除確認中は確認UIに置き換え) */}
@@ -306,6 +328,24 @@ function MatchHistoryRow({ match, onEdit, onDelete }: { match: Match; onEdit: (m
           </button>
         </>
       )}
+    </div>
+
+    {/* タグ・メモ (存在する場合のみ2行目に表示) */}
+    {hasExtra && (
+      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2 -mt-1 text-[11px]">
+        {match.tags.map((tag) => (
+          <span
+            key={tag}
+            className="px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px]"
+          >
+            {tag}
+          </span>
+        ))}
+        {match.note && (
+          <span className="text-slate-500 truncate">{match.note}</span>
+        )}
+      </div>
+    )}
     </div>
   );
 }
