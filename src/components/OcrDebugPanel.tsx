@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload,
-  FullDebugResult, OcrDebugResult, CascadeDebugDetection,
+  FullDebugResult, OcrDebugResult, CascadeDebugDetection, HeaderDebugDetection,
 } from '../types';
 
 export function OcrDebugPanel() {
@@ -406,6 +406,106 @@ function FullDebugPanel({ result }: { result: FullDebugResult }) {
           </>
         )}
       </div>
+
+      {/* ── Model 2: ヘッダーカスケード (モード/ルール/ステージ) ── */}
+      <HeaderCascadePanel header={result.header} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ヘッダーカスケード (モード/ルール/ステージ)
+// ---------------------------------------------------------------------------
+
+function HeaderCascadePanel({ header }: { header: FullDebugResult['header'] }) {
+  return (
+    <div className="bg-slate-800 rounded-lg p-2 space-y-2">
+      <p className="text-teal-400 font-semibold">Model 2 — ヘッダーカスケード (モード/ルール/ステージ)</p>
+
+      {/* クロップ情報 */}
+      <div className="bg-slate-900 rounded p-1.5 space-y-1">
+        <p className="text-slate-400 text-xs">
+          クロップ: x={header.crop_x} y={header.crop_y} &nbsp;/&nbsp; {header.crop_w}×{header.crop_h}px
+        </p>
+        {header.error && <p className="text-red-400 break-all">{header.error}</p>}
+      </div>
+
+      {/* クロップ画像 */}
+      {header.crop_image_base64 && (
+        <div className="bg-black rounded overflow-hidden">
+          <img
+            src={`data:image/png;base64,${header.crop_image_base64}`}
+            className="w-full"
+            style={{ imageRendering: 'pixelated', minHeight: '40px', maxHeight: '120px', objectFit: 'contain' }}
+            alt="header crop"
+          />
+        </div>
+      )}
+
+      {/* 検出一覧 */}
+      {header.detections.length === 0 ? (
+        <p className="text-yellow-400">検出なし (信頼度0.10以上の候補がゼロ — クロップ画像を確認してください)</p>
+      ) : (
+        <div>
+          <p className="text-slate-400 mb-1">検出 ({header.detections.length}件, 確信度降順)</p>
+          <div className="space-y-0.5 max-h-48 overflow-y-auto">
+            {header.detections.map((d, i) => (
+              <HeaderDetRow key={i} index={i} det={d} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* パース結果 */}
+      <div className="grid grid-cols-3 gap-1">
+        {[
+          { label: 'モード',     value: header.mode,  color: 'text-orange-300' },
+          { label: 'ルール',     value: header.rule,  color: 'text-pink-300' },
+          { label: 'ステージ',   value: header.stage, color: 'text-cyan-300' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="bg-slate-900 rounded p-1.5 text-center">
+            <p className="text-slate-500 text-xs">{label}</p>
+            <p className={`font-mono font-bold text-sm truncate ${value !== null ? color : 'text-slate-600'}`}>
+              {value !== null ? value : '—'}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const HEADER_GROUP_STYLES: Record<string, string> = {
+  mode:  'bg-orange-900/60 text-orange-300 border-orange-700/60',
+  rule:  'bg-pink-900/60 text-pink-300 border-pink-700/60',
+  stage: 'bg-cyan-900/60 text-cyan-300 border-cyan-700/60',
+  other: 'bg-slate-700/40 text-slate-500 border-slate-600/40',
+};
+
+function headerGroupOf(className: string): string {
+  if (className.startsWith('mode_'))  return 'mode';
+  if (className.startsWith('rule_'))  return 'rule';
+  if (className.startsWith('stage_')) return 'stage';
+  return 'other';
+}
+
+function HeaderDetRow({ index, det }: { index: number; det: HeaderDebugDetection }) {
+  const group = headerGroupOf(det.class_name);
+  return (
+    <div className="flex items-center gap-1.5 bg-slate-900 rounded px-1.5 py-0.5 text-xs">
+      <span className="text-slate-500 font-mono w-5 text-right">{index + 1}</span>
+      <span className="text-white font-mono w-28 truncate">{det.class_name}</span>
+      <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+        <div
+          className={`h-1.5 rounded-full ${det.confidence >= 0.60 ? 'bg-teal-500' : det.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-slate-500'}`}
+          style={{ width: `${Math.round(det.confidence * 100)}%` }}
+        />
+      </div>
+      <span className="text-slate-300 font-mono w-9 text-right">{(det.confidence * 100).toFixed(0)}%</span>
+      <span className="font-mono text-slate-500 w-12 text-right">{det.x_center.toFixed(3)}</span>
+      <span className={`px-1 py-px rounded border font-bold w-16 text-center truncate ${HEADER_GROUP_STYLES[group]}`}>
+        {group}
+      </span>
     </div>
   );
 }

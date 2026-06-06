@@ -109,6 +109,27 @@ export interface CascadeDebugDetection {
   group: 'paint' | 'kill' | 'death' | 'special' | 'anchor_kill' | 'anchor_death' | 'anchor_special' | 'ignored';
 }
 
+export interface HeaderDebugDetection {
+  class_name: string;
+  confidence: number;
+  x_center: number;
+}
+
+export interface HeaderDebugResult {
+  frame_w: number;
+  frame_h: number;
+  crop_x: number;
+  crop_y: number;
+  crop_w: number;
+  crop_h: number;
+  crop_image_base64: string | null;
+  detections: HeaderDebugDetection[];
+  mode: string | null;
+  rule: string | null;
+  stage: string | null;
+  error: string | null;
+}
+
 export interface FullDebugResult {
   frame_w: number;
   frame_h: number;
@@ -133,6 +154,7 @@ export interface FullDebugResult {
   death: number | null;
   special: number | null;
   error: string | null;
+  header: HeaderDebugResult;
 }
 
 export interface XpDataPoint {

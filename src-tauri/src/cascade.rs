@@ -44,6 +44,16 @@ const STATS_X_END: f32 = 0.86;
 /// 0.015 は広すぎて隣接する別桁 (間隔 0.012 程度) まで同一扱いしてしまう。
 const X_DEDUP_TOL: f32 = 0.008;
 
+/// ヘッダークロップ範囲 (フレーム比率)。
+///
+/// リザルト画面右上部の「モード/ルール/ステージ」表示エリアを切り出す。
+/// 値は既存の RULE_ROI (x=0.450-0.570) / STAGE_ROI (x=0.545-0.785) を参考にした概算値。
+/// 実機でデバッグ画面のクロップ画像を見ながら、この4定数を調整すること。
+const HEADER_CROP_X_START: f32 = 0.41;
+const HEADER_CROP_X_END:   f32 = 0.92;
+const HEADER_CROP_Y_START: f32 = 0.02;
+const HEADER_CROP_Y_END:   f32 = 0.15;
+
 // ---------------------------------------------------------------------------
 // Model 2 クラス名
 // ---------------------------------------------------------------------------
@@ -51,19 +61,18 @@ const X_DEDUP_TOL: f32 = 0.008;
 /// Model 2 のクラス名一覧。
 /// Roboflow の data.yaml アルファベット順と一致させること。
 pub const STATS_CLASS_NAMES: &[&str] = &[
-    "digit_0",
-    "digit_1",
-    "digit_2",
-    "digit_3",
-    "digit_4",
-    "digit_5",
-    "digit_6",
-    "digit_7",
-    "digit_8",
-    "digit_9",
-    "icon_death",
-    "icon_kill",
-    "icon_special",
+    "digit_0", "digit_1", "digit_2", "digit_3", "digit_4",
+    "digit_5", "digit_6", "digit_7", "digit_8", "digit_9",
+    "icon_death", "icon_kill", "icon_special",
+    "mode_challenge", "mode_open", "mode_regular", "mode_x",
+    "rule_area", "rule_asari", "rule_hoko", "rule_nawabari", "rule_yagura",
+    "stage_amabi", "stage_baigai", "stage_chozame", "stage_dekarain",
+    "stage_gonzui", "stage_hirame", "stage_kajiki", "stage_kinmedai",
+    "stage_konbu", "stage_kusaya", "stage_mahimahi", "stage_manta",
+    "stage_masaba", "stage_mategai", "stage_namerou", "stage_nanpura",
+    "stage_negitoro", "stage_ohyou", "stage_ryuuguu", "stage_sumeshi",
+    "stage_takaashi", "stage_taraport", "stage_yagara", "stage_yunohana",
+    "stage_zatou",
 ];
 
 // ---------------------------------------------------------------------------
@@ -77,6 +86,14 @@ pub struct PlayerStats {
     pub kill:    Option<i64>,
     pub death:   Option<i64>,
     pub special: Option<i64>,
+}
+
+/// ヘッダー部 YOLO 推論で得られたモード/ルール/ステージ
+#[derive(Debug, Clone)]
+pub struct HeaderInfo {
+    pub mode:  Option<String>,
+    pub rule:  Option<String>,
+    pub stage: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +176,53 @@ impl StatsDetector {
         // Steps 3–4: アンカー特定 → クラスタリング → パース
         // dets は detect_bgra 時点で 0.50 フィルタ済みなので digit_min_conf=0.0 でよい
         Ok(cluster_and_parse(&dets, 0.0))
+    }
+
+    /// ヘッダー部（モード/ルール/ステージ表示エリア）をクロップして yolo_stats で推論し、
+    /// 最高確信度のモード/ルール/ステージクラスを返す。
+    pub fn run_header_cascade(&mut self, frame: &CapturedFrame) -> Result<HeaderInfo> {
+        let (crop_x, crop_y, crop_w, crop_h) = header_crop_rect(frame.width, frame.height);
+        let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
+        let dets = self.yolo.detect_bgra(&cropped, crop_w, crop_h)?;
+
+        log::debug!(
+            "[cascade] header crop=({crop_x},{crop_y},{crop_w}x{crop_h}), detections={}",
+            dets.len()
+        );
+
+        let info = header_info_from_detections(&dets);
+        log::debug!("[cascade] header: mode={:?} rule={:?} stage={:?}", info.mode, info.rule, info.stage);
+        Ok(info)
+    }
+}
+
+/// ヘッダークロップ矩形 (crop_x, crop_y, crop_w, crop_h) をピクセル単位で算出する。
+fn header_crop_rect(frame_w: u32, frame_h: u32) -> (u32, u32, u32, u32) {
+    let crop_x = (frame_w as f32 * HEADER_CROP_X_START) as u32;
+    let crop_y = (frame_h as f32 * HEADER_CROP_Y_START) as u32;
+    let right  = ((frame_w as f32 * HEADER_CROP_X_END) as u32).min(frame_w);
+    let bottom = ((frame_h as f32 * HEADER_CROP_Y_END) as u32).min(frame_h);
+    (crop_x, crop_y, right.saturating_sub(crop_x), bottom.saturating_sub(crop_y))
+}
+
+/// 検出結果からモード/ルール/ステージそれぞれの最高確信度クラスを DB 表記に変換する。
+fn header_info_from_detections(dets: &[Detection]) -> HeaderInfo {
+    let best_in_group = |prefix: &str| -> Option<String> {
+        dets.iter()
+            .filter(|d| STATS_CLASS_NAMES.get(d.class_id).map(|n| n.starts_with(prefix)).unwrap_or(false))
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(Ordering::Equal))
+            .and_then(|d| STATS_CLASS_NAMES.get(d.class_id).copied())
+            .and_then(|class_name| {
+                if prefix == "mode_"       { mode_class_to_db(class_name).map(str::to_string) }
+                else if prefix == "rule_"  { rule_class_to_db(class_name).map(str::to_string) }
+                else                       { stage_class_to_db(class_name).map(str::to_string) }
+            })
+    };
+
+    HeaderInfo {
+        mode:  best_in_group("mode_"),
+        rule:  best_in_group("rule_"),
+        stage: best_in_group("stage_"),
     }
 }
 
@@ -384,6 +448,49 @@ impl StatsDetector {
             error:   None,
         }
     }
+
+    /// ヘッダーカスケード推論の中間状態を含む診断結果を返す。
+    /// クロップ画像・全候補検出（閾値 0.10）・最終的なモード/ルール/ステージを含む。
+    pub fn run_header_cascade_debug(&mut self, frame: &CapturedFrame) -> crate::types::HeaderDebugResult {
+        use crate::types::{HeaderDebugDetection, HeaderDebugResult};
+        let (frame_w, frame_h) = (frame.width, frame.height);
+
+        let (crop_x, crop_y, crop_w, crop_h) = header_crop_rect(frame_w, frame_h);
+        let cropped = crop_bgra(&frame.bgra, frame_w, crop_x, crop_y, crop_w, crop_h);
+        let crop_image_base64 = encode_crop_base64(&cropped, crop_w, crop_h);
+
+        let dets = match self.yolo.detect_debug_bgra(&cropped, crop_w, crop_h) {
+            Ok(d) => d,
+            Err(e) => return HeaderDebugResult {
+                frame_w, frame_h,
+                crop_x, crop_y, crop_w, crop_h,
+                crop_image_base64,
+                detections: vec![],
+                mode: None, rule: None, stage: None,
+                error: Some(format!("Model 2 推論エラー: {e}")),
+            },
+        };
+
+        let info = header_info_from_detections(&dets);
+
+        // 確信度降順 (デバッグ表示用)
+        let mut sorted = dets;
+        sorted.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(Ordering::Equal));
+        let debug_dets: Vec<HeaderDebugDetection> = sorted.iter().map(|d| HeaderDebugDetection {
+            class_name: d.class_name.clone(),
+            confidence: d.confidence,
+            x_center:   (d.bbox.x1 + d.bbox.x2) / 2.0,
+        }).collect();
+
+        HeaderDebugResult {
+            frame_w, frame_h,
+            crop_x, crop_y, crop_w, crop_h,
+            crop_image_base64,
+            detections: debug_dets,
+            mode: info.mode, rule: info.rule, stage: info.stage,
+            error: None,
+        }
+    }
 }
 
 fn encode_crop_base64(bgra: &[u8], width: u32, height: u32) -> Option<String> {
@@ -420,6 +527,62 @@ fn assign_group(
     else if death_lo.map_or(true, |dx| cx < dx) { "kill".to_string() }
     else if special_lo.map_or(true, |sx| cx < sx) { "death".to_string() }
     else { "special".to_string() }
+}
+
+// ---------------------------------------------------------------------------
+// クラス名 → DB 値マッピング
+// ---------------------------------------------------------------------------
+
+pub fn mode_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "mode_x"         => Some("Xマッチ"),
+        "mode_regular"   => Some("レギュラーマッチ"),
+        "mode_challenge" => Some("バンカラマッチ(チャレンジ)"),
+        "mode_open"      => Some("バンカラマッチ(オープン)"),
+        _ => None,
+    }
+}
+
+pub fn rule_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "rule_area"     => Some("ガチエリア"),
+        "rule_asari"    => Some("ガチアサリ"),
+        "rule_hoko"     => Some("ガチホコ"),
+        "rule_nawabari" => Some("ナワバリバトル"),
+        "rule_yagura"   => Some("ガチヤグラ"),
+        _ => None,
+    }
+}
+
+pub fn stage_class_to_db(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "stage_yunohana"  => Some("ユノハナ大渓谷"),
+        "stage_gonzui"    => Some("ゴンズイ地区"),
+        "stage_yagara"    => Some("ヤガラ市場"),
+        "stage_mategai"   => Some("マテガイ放水路"),
+        "stage_namerou"   => Some("ナメロウ金属"),
+        "stage_nanpura"   => Some("ナンプラー遺跡"),
+        "stage_kusaya"    => Some("クサヤ温泉"),
+        "stage_hirame"    => Some("ヒラメが丘団地"),
+        "stage_masaba"    => Some("マサバ海峡大橋"),
+        "stage_sumeshi"   => Some("スメーシーワールド"),
+        "stage_kinmedai"  => Some("キンメダイ美術館"),
+        "stage_taraport"  => Some("タラポートショッピングパーク"),
+        "stage_baigai"    => Some("バイガイ亭"),
+        "stage_amabi"     => Some("海女美術大学"),
+        "stage_chozame"   => Some("チョウザメ造船"),
+        "stage_zatou"     => Some("ザトウマーケット"),
+        "stage_ryuuguu"   => Some("リュウグウターミナル"),
+        "stage_ohyou"     => Some("オヒョウ海運"),
+        "stage_kajiki"    => Some("カジキ空港"),
+        "stage_negitoro"  => Some("ネギトロ炭鉱"),
+        "stage_dekarain"  => Some("デカライン高架下"),
+        "stage_konbu"     => Some("コンブトラック"),
+        "stage_mahimahi"  => Some("マヒマヒリゾート&スパ"),
+        "stage_manta"     => Some("マンタマリア号"),
+        "stage_takaashi"  => Some("タカアシ経済特区"),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

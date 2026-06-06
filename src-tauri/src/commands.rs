@@ -5,7 +5,7 @@ use crate::{
     ocr::ocr_from_file,
     state::AppState,
     types::{CaptureDebugResult, CaptureStatusPayload, OcrTestResult, WindowInfo,
-            YoloDebugDetection, FullDebugResult},
+            YoloDebugDetection, FullDebugResult, HeaderDebugResult},
 };
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,14 @@ pub async fn debug_full(hwnd: u64) -> Result<FullDebugResult, String> {
                 kill_anchor_x: None, death_anchor_x: None, special_anchor_x: None,
                 paint: None, kill: None, death: None, special: None,
                 error: Some(format!("yolo_result.onnx ロード失敗: {e}")),
+                header: HeaderDebugResult {
+                    frame_w: 0, frame_h: 0,
+                    crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+                    crop_image_base64: None,
+                    detections: vec![],
+                    mode: None, rule: None, stage: None,
+                    error: None,
+                },
             });
         }
 
@@ -167,6 +175,9 @@ pub async fn debug_full(hwnd: u64) -> Result<FullDebugResult, String> {
         let arrow = YoloDetector::best_detection(&m1_dets, YoloClass::MyArrow);
         let cascade = tokio::task::block_in_place(|| stats.run_cascade_debug(&frame, arrow));
 
+        // Model 2: ヘッダーカスケード (モード/ルール/ステージ)
+        let header = tokio::task::block_in_place(|| stats.run_header_cascade_debug(&frame));
+
         Ok(FullDebugResult {
             frame_w: fw, frame_h: fh,
             model1_loaded: true,
@@ -188,6 +199,7 @@ pub async fn debug_full(hwnd: u64) -> Result<FullDebugResult, String> {
             death: cascade.death,
             special: cascade.special,
             error: cascade.error,
+            header,
         })
     }
     #[cfg(not(target_os = "windows"))]

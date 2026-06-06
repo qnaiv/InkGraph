@@ -177,6 +177,33 @@ pub struct CascadeDebugResult {
     pub error:              Option<String>,
 }
 
+/// ヘッダーカスケードデバッグ: Model 2 の1検出エントリ（モード/ルール/ステージ判定用、グループなし）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderDebugDetection {
+    pub class_name: String,
+    pub confidence: f32,
+    pub x_center:   f32,
+}
+
+/// ヘッダーカスケードデバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderDebugResult {
+    pub frame_w:           u32,
+    pub frame_h:           u32,
+    pub crop_x:            u32,
+    pub crop_y:            u32,
+    pub crop_w:            u32,
+    pub crop_h:            u32,
+    /// クロップ画像の base64 PNG (フロントエンド表示用)
+    pub crop_image_base64: Option<String>,
+    /// Model 2 の全検出 (確信度降順)
+    pub detections:        Vec<HeaderDebugDetection>,
+    pub mode:              Option<String>,
+    pub rule:              Option<String>,
+    pub stage:             Option<String>,
+    pub error:             Option<String>,
+}
+
 /// YOLO + カスケード統合デバッグコマンドの戻り値
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullDebugResult {
@@ -186,7 +213,7 @@ pub struct FullDebugResult {
     pub model1_loaded:      bool,
     pub detections:         Vec<YoloDebugDetection>,
     pub ocr:                Option<OcrDebugResult>,
-    // Cascade / Model 2 (yolo_stats.onnx)
+    // Cascade / Model 2 (yolo_stats.onnx) — KDA カスケード
     pub model2_loaded:      bool,
     pub arrow_found:        bool,
     pub crop_x:             u32,
@@ -203,6 +230,8 @@ pub struct FullDebugResult {
     pub death:              Option<i64>,
     pub special:            Option<i64>,
     pub error:              Option<String>,
+    // ヘッダーカスケード (モード/ルール/ステージ)
+    pub header:             HeaderDebugResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
