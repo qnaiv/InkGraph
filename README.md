@@ -108,7 +108,7 @@ InkGraph/
 │   │   ├── extractor.rs    # データ抽出 (クロップ + OCR)
 │   │   └── db.rs           # SQLite 操作
 │   └── Cargo.toml
-├── ARCHITECTURE.md         # 詳細設計書
+├── docs/spec.md            # 詳細仕様書
 └── README.md
 ```
 
@@ -123,7 +123,7 @@ InkGraph/
 - Pull Request にはレビューを必須とする
 - CI が通らない PR はマージ不可
 
-詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) を参照してください。
+詳細は [docs/spec.md](./docs/spec.md) を参照してください。
 
 ---
 

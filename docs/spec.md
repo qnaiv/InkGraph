@@ -298,13 +298,43 @@ InkGraph/
 
 ---
 
-## 10. 開発・デバッグコマンド
+## 10. Tauri コマンド一覧
+
+バックエンド (`commands.rs`) で定義されている `#[tauri::command]` はキャプチャ制御とデバッグ用のみ。
+**試合データの CRUD は Tauri コマンドを介さず、フロントエンドが `tauri-plugin-sql` 経由で直接 SQL を発行する**
+（`src/lib/db.ts` の `insertMatch` / `updateMatchResult` / `dbUpdateWeapon` / `dbUpdateTags` /
+`dbUpdateNote` / `dbUpdateFullMatch` / `dbDeleteMatch` / `selectMatches` / `selectAllMatches`）。
+旧 `ARCHITECTURE.md` に記載されていた `get_matches` / `update_weapon` 等の Tauri コマンドは実装されておらず、
+この直接 SQL 方式に置き換わっている。
 
 | Tauri コマンド | 説明 |
 |---|---|
-| `debug_capture` | 1フレームスナップショットで Phase 1/2 診断（OCR・ピクセル判定結果） |
-| `debug_full` | Model 1 + Model 2 統合デバッグ（全検出 conf 0.10 以上 + クロップ画像 base64） |
 | `list_windows` | キャプチャ可能ウィンドウ一覧取得 |
 | `start_capture` | キャプチャループ開始 (hwnd 指定) |
 | `stop_capture` | キャプチャループ停止 |
 | `test_ocr` | 画像ファイルパス指定で OCR テスト |
+| `debug_capture` | 1フレームスナップショットで Phase 1/2 診断（OCR・ピクセル判定結果） |
+| `debug_full` | Model 1 + Model 2 統合デバッグ（全検出 conf 0.10 以上 + クロップ画像 base64） |
+
+### イベント一覧（再掲）
+
+| イベント名 | 方向 | 説明 |
+|---|---|---|
+| `battle_started` | Rust → React | バトル開始検知（§7参照） |
+| `match_detected` | Rust → React | リザルト確定（§7参照） |
+| `capture_status` | Rust → React | キャプチャ開始・停止状態（§7参照） |
+
+---
+
+## 11. 現在の開発状況 (2026-06 時点)
+
+- **YOLO カスケード方式へ完全移行済み**: Win/Lose/Draw 判定・スタッツ抽出・モード/ルール/ステージ認識のすべてが
+  YOLO (Model 1 + Model 2 カスケード) ベースで動作。WinRT OCR は `test_ocr` コマンドやフォールバック経路として残存。
+- **DB スキーマは安定**: マイグレーション 7 件が適用済み（`mode` / `special_count` / `gold_award_count` /
+  `paint_count` 追加、`result` CHECK 制約の `draw`/`in_progress` 拡張）。今後のスキーマ変更は新規マイグレーション
+  ファイルの追加で行うこと（既存ファイルは変更しない）。
+- **UI はタブ構成**: `App.tsx` で `graph`（XP推移） / `analysis`（分析） / `history`（全試合）の3タブ切り替え。
+  `ARCHITECTURE.md` に記載されていた「グラフ＋サイドバー」の2カラムレイアウトからは変更されている。
+- **チューニング作業が中心**: 直近のコミットは `cascade.rs` / `detector.rs` 内の検出領域・閾値定数
+  （`CROP_HALF_H_RATIO`, `X_DEDUP_TOL`, `STATS_X_START/END`, `PANEL_BOUNDARY_Y` 等）の調整が多数を占める。
+  `debug_full` / `debug_capture` コマンドで実機の検出結果を確認しながら定数を調整するのが基本フロー。
