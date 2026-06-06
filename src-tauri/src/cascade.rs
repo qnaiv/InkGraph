@@ -49,10 +49,10 @@ const X_DEDUP_TOL: f32 = 0.008;
 /// リザルト画面右上部の「モード/ルール/ステージ」表示エリアを切り出す。
 /// 値は既存の RULE_ROI (x=0.450-0.570) / STAGE_ROI (x=0.545-0.785) を参考にした概算値。
 /// 実機でデバッグ画面のクロップ画像を見ながら、この4定数を調整すること。
-const HEADER_CROP_X_START: f32 = 0.30;
-const HEADER_CROP_X_END:   f32 = 0.80;
-const HEADER_CROP_Y_START: f32 = 0.04;
-const HEADER_CROP_Y_END:   f32 = 0.13;
+const HEADER_CROP_X_START: f32 = 0.41;
+const HEADER_CROP_X_END:   f32 = 0.92;
+const HEADER_CROP_Y_START: f32 = 0.02;
+const HEADER_CROP_Y_END:   f32 = 0.15;
 
 // ---------------------------------------------------------------------------
 // Model 2 クラス名
