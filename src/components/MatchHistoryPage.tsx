@@ -1,9 +1,10 @@
 // InkGraph — 全試合一覧ページ
 
 import { useState, useEffect, useCallback } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { selectAllMatches, dbDeleteMatch } from '../lib/db';
 import { RULES } from '../types';
-import type { Match, RawMatch } from '../types';
+import type { Match, MatchDetectedPayload, RawMatch } from '../types';
 
 function parseMatch(raw: RawMatch): Match {
   let tags: string[] = [];
@@ -41,6 +42,43 @@ export function MatchHistoryPage({ onEdit, onAddNew, refreshKey }: Props) {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load, refreshKey]);
+
+  // ── Rust からのリアルタイム通知を購読 (DB への書き込みは useMatches 側で行う) ──
+  useEffect(() => {
+    let cancelled = false;
+    const cleanupFns: UnlistenFn[] = [];
+
+    async function setup() {
+      // バトル開始 → "in_progress" 行を一覧の先頭に追加
+      const fn1 = await listen<MatchDetectedPayload>('battle_started', (event) => {
+        const raw = event.payload.match_data;
+        setAllMatches((prev) => [parseMatch(raw), ...prev]);
+      });
+      if (cancelled) { fn1(); return; }
+      cleanupFns.push(fn1);
+
+      // リザルト確定 → 既存の "in_progress" 行を更新 (無ければ先頭に追加)
+      const fn2 = await listen<MatchDetectedPayload>('match_detected', (event) => {
+        const raw = event.payload.match_data;
+        setAllMatches((prev) => {
+          const exists = prev.some((m) => m.id === raw.id);
+          if (exists) {
+            return prev.map((m) => (m.id === raw.id ? parseMatch(raw) : m));
+          }
+          return [parseMatch(raw), ...prev];
+        });
+      });
+      if (cancelled) { fn2(); return; }
+      cleanupFns.push(fn2);
+    }
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      cleanupFns.forEach((fn) => fn());
+    };
+  }, []);
 
   const handleDelete = useCallback(async (id: string) => {
     await dbDeleteMatch(id);
