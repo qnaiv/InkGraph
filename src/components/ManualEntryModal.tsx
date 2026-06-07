@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { RULES, PRESET_TAGS } from '../types';
 import { WeaponPicker } from './WeaponPicker';
+import { getLastWeaponName } from '../assets/weapons';
 import type { Match, RawMatch } from '../types';
 
 const MODES = [
@@ -30,7 +31,14 @@ const STAGES = [
   '海女美術大学',
   'オヒョウ海運',
   'バイガイ亭',
-  '万国博覧会',
+  'ナンプラー遺跡',
+  'マンタマリア号',
+  'コンブトラック',
+  'タカアシ経済特区',
+  'ネギトロ炭鉱',
+  'カジキ空港',
+  'リュウグウターミナル',
+  'デカライン高架下',
 ];
 
 interface Props {
@@ -53,7 +61,7 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   const [mode, setMode] = useState(initialMatch?.mode ?? 'Xマッチ');
   const [rule, setRule] = useState<string>(initialMatch?.rule ?? RULES[0]);
   const [stage, setStage] = useState(initialMatch?.stage ?? '');
-  const [weapon, setWeapon] = useState<string | null>(initialMatch?.weapon ?? null);
+  const [weapon, setWeapon] = useState<string | null>(initialMatch?.weapon ?? getLastWeaponName());
   const [kill, setKill] = useState(
     initialMatch?.kill_count != null ? String(initialMatch.kill_count) : '',
   );

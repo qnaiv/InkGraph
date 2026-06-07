@@ -33,7 +33,7 @@ export async function selectMatches(
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
     kill_count, death_count, special_count, paint_count, xp_after, gold_award_count,
-    tags, note, created_at, updated_at
+    tags, note, auto_recorded, created_at, updated_at
   `;
   if (rule) {
     return db.select<RawMatch[]>(
@@ -51,14 +51,19 @@ export async function selectMatches(
 // INSERT
 // ---------------------------------------------------------------------------
 
-/** 試合レコードを挿入する (match_detected イベント受信時に呼ぶ) */
-export async function insertMatch(m: RawMatch): Promise<void> {
+/**
+ * 試合レコードを挿入する (match_detected イベント受信時に呼ぶ)
+ *
+ * @param autoRecorded キャプチャによる自動認識で挿入する場合は true。
+ *   true の場合、ユーザーが編集ダイアログで保存して確定するまで "未確定" として扱われる。
+ */
+export async function insertMatch(m: RawMatch, autoRecorded: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO matches
        (id, played_at, mode, rule, stage, weapon, result,
-        kill_count, death_count, special_count, paint_count, xp_after, gold_award_count, tags, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        kill_count, death_count, special_count, paint_count, xp_after, gold_award_count, tags, note, auto_recorded)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [
       m.id,
       m.played_at,
@@ -75,6 +80,7 @@ export async function insertMatch(m: RawMatch): Promise<void> {
       m.gold_award_count  ?? null,
       m.tags ?? '[]',
       m.note ?? null,
+      autoRecorded ? 1 : 0,
     ],
   );
 }
@@ -111,35 +117,16 @@ export async function updateMatchResult(m: RawMatch): Promise<void> {
   );
   if (res.rowsAffected === 0) {
     // in_progress レコードが存在しない場合 (capture 途中から開始した等) は挿入
-    await insertMatch(m);
+    await insertMatch(m, true);
   }
 }
 
-export async function dbUpdateWeapon(id: string, weapon: string): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    'UPDATE matches SET weapon = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-    [weapon, id],
-  );
-}
-
-export async function dbUpdateTags(id: string, tags: string[]): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    'UPDATE matches SET tags = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-    [JSON.stringify(tags), id],
-  );
-}
-
-export async function dbUpdateNote(id: string, note: string): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    'UPDATE matches SET note = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-    [note, id],
-  );
-}
-
-/** 既存レコードの全フィールドを更新する (手動編集用) */
+/**
+ * 既存レコードの全フィールドを更新する (編集ダイアログでの保存用)
+ *
+ * 編集ダイアログを開いて保存する操作そのものが「ユーザーによる確定」を意味するため、
+ * auto_recorded フラグを 0 (確定済み) にリセットする。
+ */
 export async function dbUpdateFullMatch(m: RawMatch): Promise<void> {
   const db = await getDb();
   await db.execute(
@@ -147,7 +134,7 @@ export async function dbUpdateFullMatch(m: RawMatch): Promise<void> {
      SET played_at = $1, mode = $2, rule = $3, stage = $4, weapon = $5,
          result = $6, kill_count = $7, death_count = $8, special_count = $9,
          paint_count = $10, xp_after = $11, gold_award_count = $12,
-         tags = $13, note = $14, updated_at = CURRENT_TIMESTAMP
+         tags = $13, note = $14, auto_recorded = 0, updated_at = CURRENT_TIMESTAMP
      WHERE id = $15`,
     [
       m.played_at,
@@ -181,7 +168,7 @@ export async function selectAllMatches(rule?: string | null): Promise<RawMatch[]
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
     kill_count, death_count, special_count, paint_count, xp_after, gold_award_count,
-    tags, note, created_at, updated_at
+    tags, note, auto_recorded, created_at, updated_at
   `;
   if (rule) {
     return db.select<RawMatch[]>(

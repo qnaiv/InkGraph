@@ -235,7 +235,18 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                     match_data: match_record, ocr_confidence: 1.0,
                                 });
                             }
-                            Err(e) => log::error!("[capture_loop] YOLO extraction failed: {e}"),
+                            Err(e) => {
+                                // 抽出に失敗した場合も pending_match_id をリセットする。
+                                // リセットしないと次の BattleStart 検知 (L139) が
+                                // ブロックされ続け、固着タイムアウト (30分) まで
+                                // 以降の試合が一切記録されなくなってしまう。
+                                log::error!(
+                                    "[capture_loop] YOLO extraction failed (id={:?}): {e} — resetting pending_match_id",
+                                    pending_match_id
+                                );
+                                pending_match_id  = None;
+                                battle_started_at = None;
+                            }
                         }
                     }
                 }

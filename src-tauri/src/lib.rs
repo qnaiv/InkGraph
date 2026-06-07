@@ -76,6 +76,12 @@ pub fn run() {
                         sql: include_str!("../migrations/007_fix_result_constraint.sql"),
                         kind: tauri_plugin_sql::MigrationKind::Up,
                     },
+                    tauri_plugin_sql::Migration {
+                        version: 8,
+                        description: "add auto_recorded column",
+                        sql: include_str!("../migrations/008_add_auto_recorded.sql"),
+                        kind: tauri_plugin_sql::MigrationKind::Up,
+                    },
                 ],
             )
             .build())
