@@ -48,12 +48,17 @@ interface Props {
   onSubmit: (match: RawMatch) => Promise<void>;
 }
 
+function toLocalDatetimeString(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   const isEdit = initialMatch != null;
-  const nowStr = new Date().toISOString().slice(0, 16);
+  const nowStr = toLocalDatetimeString(new Date());
 
   const [playedAt, setPlayedAt] = useState(
-    isEdit ? new Date(initialMatch.played_at).toISOString().slice(0, 16) : nowStr,
+    isEdit ? toLocalDatetimeString(new Date(initialMatch.played_at)) : nowStr,
   );
   const [result, setResult] = useState<'win' | 'lose'>(
     initialMatch?.result === 'lose' ? 'lose' : 'win',
