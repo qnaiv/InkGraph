@@ -38,7 +38,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
         capture::WindowCaptureSession,
         cascade::StatsDetector,
         db::{new_in_progress_match, new_match_from_ocr},
-        detector::{pixel_result_check, YoloClass, YoloDetector, PANEL_BOUNDARY_Y},
+        detector::{pixel_result_check, YoloClass, YoloDetector, DEFAULT_CONF_THRESHOLD, PANEL_BOUNDARY_Y},
         extractor::extract_from_yolo_detections,
         types::MatchDetectedPayload,
     };
@@ -59,15 +59,18 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
     }
     log::info!("[capture_loop] YOLO loaded: {}", model_path.display());
 
-    // ── Model 2: スタッツモデルをロード (失敗しても続行 — オプション) ───
-    let stats_model_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("assets/models/yolo_stats.onnx")))
-        .unwrap_or_else(|| std::path::PathBuf::from("assets/models/yolo_stats.onnx"));
-    let mut stats_detector = StatsDetector::new(&stats_model_path);
-    match tokio::task::block_in_place(|| stats_detector.load()) {
-        Ok(_)  => log::info!("[capture_loop] stats model loaded: {}", stats_model_path.display()),
-        Err(e) => log::warn!("[capture_loop] yolo_stats not loaded (cascade disabled): {e}"),
+    {
+        let rec_path  = model_path.with_file_name("ppocr_rec_ja.onnx");
+        let dict_path = model_path.with_file_name("ppocr_dict_ja.txt");
+        if let Err(e) = tokio::task::block_in_place(|| crate::ocr_rec::init(&rec_path, &dict_path)) {
+            log::warn!("[capture_loop] ocr_rec init failed: {e}");
+        }
+    }
+
+    let stats_model_path = model_path.with_file_name("yolo_stats.onnx");
+    let mut stats = StatsDetector::new(&stats_model_path);
+    if let Err(e) = tokio::task::block_in_place(|| stats.load()) {
+        log::warn!("[capture_loop] Model 2 load failed (OCR fallback only): {e}");
     }
 
     // ── WGC セッション作成 ─────────────────────────────────────────────────
@@ -119,6 +122,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                 continue;
             }
         };
+        *state.last_frame.lock().await = Some(frame.clone());
 
         frame_count += 1;
         if frame_count % 25 == 0 {
@@ -138,8 +142,14 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
 
             if pending_match_id.is_none() {
                 // --- BattleStart クラスで試合開始を検知 ---
+                if let Some(bs) = YoloDetector::best_detection(&dets, YoloClass::BattleStart) {
+                    log::info!(
+                        "[capture_loop] BattleStart candidate found with confidence: {:.2}",
+                        bs.confidence
+                    );
+                }
                 if YoloDetector::best_detection(&dets, YoloClass::BattleStart)
-                    .filter(|d| d.confidence >= 0.60)
+                    .filter(|d| d.confidence >= DEFAULT_CONF_THRESHOLD)
                     .is_some()
                 {
                     let m = new_in_progress_match();
@@ -153,7 +163,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
             } else {
                 // pending_match_id が設定中に BattleStart が再検知された場合はデバッグログ
                 if let Some(bs) = YoloDetector::best_detection(&dets, YoloClass::BattleStart) {
-                    if bs.confidence >= 0.60 {
+                    if bs.confidence >= DEFAULT_CONF_THRESHOLD {
                         let elapsed = battle_started_at
                             .map(|t| t.elapsed().as_secs())
                             .unwrap_or(0);
@@ -202,20 +212,37 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                     };
 
                     if let Some(result_str) = result_opt {
-                        // カスケード推論 (Model 2): MyArrow が検出されていれば実行
-                        let cascade_stats = YoloDetector::best_detection(&dets, YoloClass::MyArrow)
-                            .and_then(|arrow| {
-                                tokio::task::block_in_place(|| {
-                                    stats_detector.run_cascade(&frame, arrow).ok()
-                                })
-                            });
-
-                        // ヘッダー部 YOLO 推論: モード/ルール/ステージをクラス検出で取得
-                        let header_info = tokio::task::block_in_place(|| {
-                            stats_detector.run_header_cascade(&frame).ok()
-                        });
-
-                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str, cascade_stats, header_info)) {
+                        // MyArrow をクローンして block_in_place クロージャに渡す
+                        let arrow_for_stats = YoloDetector::best_detection(&dets, YoloClass::MyArrow).cloned();
+                        let (stats_override, header_override, crop_base64, crop_header_base64) = if stats.is_loaded() {
+                            tokio::task::block_in_place(|| {
+                                // icon_kill/icon_death/icon_special アンカー位置を使って
+                                // KDA を正確に取得する (固定 ROI OCR より精度が高い)
+                                let stats_ov = arrow_for_stats.as_ref()
+                                    .and_then(|a| {
+                                        let r = stats.run_cascade(&frame, a);
+                                        if let Err(ref e) = r {
+                                            log::warn!("[capture_loop] run_cascade failed: {e}");
+                                        }
+                                        r.ok()
+                                    });
+                                log::info!(
+                                    "[capture_loop] Model 2 stats: kill={:?} death={:?} special={:?} paint={:?}",
+                                    stats_ov.as_ref().and_then(|s| s.kill),
+                                    stats_ov.as_ref().and_then(|s| s.death),
+                                    stats_ov.as_ref().and_then(|s| s.special),
+                                    stats_ov.as_ref().and_then(|s| s.paint),
+                                );
+                                let header_ov = stats.run_header_cascade(&frame).ok();
+                                let crop = arrow_for_stats.as_ref()
+                                    .and_then(|a| stats.get_stats_crop_base64(&frame, a));
+                                let crop_header = stats.get_header_crop_base64(&frame);
+                                (stats_ov, header_ov, crop, crop_header)
+                            })
+                        } else {
+                            (None, None, None, None)
+                        };
+                        match tokio::task::block_in_place(|| extract_from_yolo_detections(&frame, &dets, result_str, stats_override, header_override)) {
                             Ok(data) => {
                                 let id = pending_match_id.take();
                                 battle_started_at = None;
@@ -225,6 +252,7 @@ async fn run_windows_loop(app: &AppHandle, state: &AppState, hwnd: u64) {
                                     data.paint_count,
                                     data.xp_after, data.rule, data.stage, data.mode,
                                     data.gold_award_count,
+                                    crop_base64, crop_header_base64,
                                 );
                                 log::info!(
                                     "[capture_loop] YOLO result id={} result={} mode={:?} rule={:?} stage={:?}",
@@ -290,6 +318,7 @@ async fn run_stub_loop(app: &AppHandle, state: &AppState) {
         Some("マテガイ放水路".to_string()),
         Some("Xマッチ".to_string()),
         Some(1), // スタブ: 金表彰1枚
+        None, None,
     );
     let _ = app.emit("match_detected", MatchDetectedPayload {
         match_data: result, ocr_confidence: 0.0,

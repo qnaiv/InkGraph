@@ -58,7 +58,7 @@ InkGraph は Splatoon 3 のXマッチ対戦記録を自動収集・可視化す�
 **備考:**
 - 現在の学習モデルは nc=7（ID 0〜6）の場合がある。Win/RuleText/StageText が未学習の場合は OCR フォールバックが使われる。
 - 信頼度閾値: `DEFAULT_CONF_THRESHOLD = 0.50`
-- BattleStart 判定には追加で `confidence >= 0.60` を要求
+- BattleStart 判定には追加で `confidence >= DEFAULT_CONF_THRESHOLD (0.50)` を要求
 
 **勝敗判定ロジック:**
 - `Win conf >= 0.30` または `Lose conf >= 0.30` または `MyArrow conf >= 0.40` → リザルト画面と判定
@@ -155,7 +155,7 @@ InkGraph は Splatoon 3 のXマッチ対戦記録を自動収集・可視化す�
   │    → pending = None (強制リセット)    │
   │                                      │
   │  if pending == None                  │
-  │    BattleStart >= 0.60 ?             │
+  │    BattleStart >= 0.50 ?             │
   │      → pending = new UUID            │
   │      → emit battle_started           │
   │                                      │
@@ -214,7 +214,7 @@ CREATE TABLE matches (
 
 ### `battle_started`
 
-- **発火タイミング**: BattleStart クラスを `confidence >= 0.60` で検知
+- **発火タイミング**: BattleStart クラスを `confidence >= DEFAULT_CONF_THRESHOLD (0.50)` で検知
 - **Payload**: `MatchDetectedPayload { match_data: Match (result="in_progress"), ocr_confidence: 1.0 }`
 - **フロントエンド処理**: `insertMatch` → SQLite 挿入、`setMatches` で UI 追加（amber「試合中」バッジ）
 

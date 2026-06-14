@@ -346,6 +346,35 @@ fn digits_to_int(digits: &[u8]) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
+// クロップ画像取得 (本番モード用)
+// ---------------------------------------------------------------------------
+
+impl StatsDetector {
+    /// スタッツ領域のクロップ画像を base64 PNG で返す。
+    /// run_cascade() と同じクロップ座標計算を使い、YOLO 推論は行わない。
+    pub fn get_stats_crop_base64(&self, frame: &CapturedFrame, arrow: &Detection) -> Option<String> {
+        let crop_half_h = arrow_crop_half_h(arrow, frame.height);
+        let y_px =
+            ((arrow.bbox.y1 + arrow.bbox.y2) / 2.0 * frame.height as f32) as u32;
+        let crop_y = y_px.saturating_sub(crop_half_h);
+        let crop_h = (crop_half_h * 2).min(frame.height.saturating_sub(crop_y));
+        let crop_x = (frame.width as f32 * STATS_X_START) as u32;
+        let crop_right = ((frame.width as f32 * STATS_X_END) as u32).min(frame.width);
+        let crop_w = crop_right.saturating_sub(crop_x);
+        let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
+        encode_crop_base64(&cropped, crop_w, crop_h)
+    }
+
+    /// ヘッダー領域のクロップ画像を base64 PNG で返す。
+    /// run_header_cascade() と同じクロップ座標計算を使い、YOLO 推論は行わない。
+    pub fn get_header_crop_base64(&self, frame: &CapturedFrame) -> Option<String> {
+        let (crop_x, crop_y, crop_w, crop_h) = header_crop_rect(frame.width, frame.height);
+        let cropped = crop_bgra(&frame.bgra, frame.width, crop_x, crop_y, crop_w, crop_h);
+        encode_crop_base64(&cropped, crop_w, crop_h)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // デバッグ
 // ---------------------------------------------------------------------------
 
