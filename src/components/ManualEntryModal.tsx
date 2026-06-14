@@ -71,6 +71,9 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   const [special, setSpecial] = useState(
     initialMatch?.special_count != null ? String(initialMatch.special_count) : '',
   );
+  const [paint, setPaint] = useState(
+    initialMatch?.paint_count != null ? String(initialMatch.paint_count) : '',
+  );
   const [xp, setXp] = useState(
     initialMatch?.xp_after != null ? String(initialMatch.xp_after) : '',
   );
@@ -93,12 +96,12 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
       rule: rule || null,
       stage: stage || null,
       weapon: weapon || null,
-      kill_count: kill !== '' ? parseInt(kill, 10) : null,
-      death_count: death !== '' ? parseInt(death, 10) : null,
-      special_count: special !== '' ? parseInt(special, 10) : null,
+      kill_count: kill !== '' && Number.isFinite(parseInt(kill, 10)) ? parseInt(kill, 10) : null,
+      death_count: death !== '' && Number.isFinite(parseInt(death, 10)) ? parseInt(death, 10) : null,
+      special_count: special !== '' && Number.isFinite(parseInt(special, 10)) ? parseInt(special, 10) : null,
       xp_after: xp !== '' ? parseFloat(xp) : null,
       gold_award_count: initialMatch?.gold_award_count ?? null,
-      paint_count: initialMatch?.paint_count ?? null,
+      paint_count: paint !== '' && Number.isFinite(parseInt(paint, 10)) ? parseInt(paint, 10) : null,
       tags: JSON.stringify(tags),
       note: note || null,
     };
@@ -247,6 +250,19 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* 塗ポイント */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">塗ポイント</label>
+            <input
+              type="number"
+              min="0"
+              className="w-full bg-slate-700 text-white rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500"
+              value={paint}
+              onChange={(e) => setPaint(e.target.value)}
+              placeholder="例: 1200"
+            />
           </div>
 
           {/* XP */}
