@@ -12,6 +12,7 @@ import {
   dbUpdateNote,
   dbUpdateFullMatch,
   dbDeleteMatch,
+  dbDeleteAllMatches,
 } from '../lib/db';
 
 // ---------------------------------------------------------------------------
@@ -34,12 +35,13 @@ interface UseMatchesReturn {
   matches: Match[];
   isLoading: boolean;
   error: string | null;
-  addMatch:     (raw: RawMatch) => Promise<void>;
-  updateMatch:  (raw: RawMatch) => Promise<void>;
-  deleteMatch:  (id: string) => Promise<void>;
-  updateWeapon: (id: string, weapon: string) => Promise<void>;
-  updateTags:   (id: string, tags: string[]) => Promise<void>;
-  updateNote:   (id: string, note: string)   => Promise<void>;
+  addMatch:       (raw: RawMatch) => Promise<void>;
+  updateMatch:    (raw: RawMatch) => Promise<void>;
+  deleteMatch:    (id: string) => Promise<void>;
+  clearAllMatches: () => Promise<void>;
+  updateWeapon:   (id: string, weapon: string) => Promise<void>;
+  updateTags:     (id: string, tags: string[]) => Promise<void>;
+  updateNote:     (id: string, note: string)   => Promise<void>;
 }
 
 export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
@@ -132,6 +134,12 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
+  // ── 全削除操作 ────────────────────────────────────────────────
+  const clearAllMatches = useCallback(async () => {
+    await dbDeleteAllMatches();
+    setMatches([]);
+  }, []);
+
   // ── 更新操作 ─────────────────────────────────────────────────
   const updateWeapon = useCallback(async (id: string, weapon: string) => {
     await dbUpdateWeapon(id, weapon);
@@ -148,5 +156,5 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, note } : m)));
   }, []);
 
-  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, updateWeapon, updateTags, updateNote };
+  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, clearAllMatches, updateWeapon, updateTags, updateNote };
 }
