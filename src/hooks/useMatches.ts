@@ -2,14 +2,12 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getLastWeaponName } from '../assets/weapons';
 import type { Match, MatchDetectedPayload, RawMatch, Rule } from '../types';
 import {
   selectMatches,
   insertMatch,
   updateMatchResult,
-  dbUpdateWeapon,
-  dbUpdateTags,
-  dbUpdateNote,
   dbUpdateFullMatch,
   dbDeleteMatch,
   dbDeleteAllMatches,
@@ -24,7 +22,7 @@ function parseMatch(raw: RawMatch): Match {
   if (raw.tags) {
     try { tags = JSON.parse(raw.tags); } catch { tags = []; }
   }
-  return { ...raw, tags };
+  return { ...raw, tags, auto_recorded: Boolean(raw.auto_recorded) };
 }
 
 // ---------------------------------------------------------------------------
@@ -35,13 +33,10 @@ interface UseMatchesReturn {
   matches: Match[];
   isLoading: boolean;
   error: string | null;
-  addMatch:       (raw: RawMatch) => Promise<void>;
-  updateMatch:    (raw: RawMatch) => Promise<void>;
-  deleteMatch:    (id: string) => Promise<void>;
+  addMatch:        (raw: RawMatch) => Promise<void>;
+  updateMatch:     (raw: RawMatch) => Promise<void>;
+  deleteMatch:     (id: string) => Promise<void>;
   clearAllMatches: () => Promise<void>;
-  updateWeapon:   (id: string, weapon: string) => Promise<void>;
-  updateTags:     (id: string, tags: string[]) => Promise<void>;
-  updateNote:     (id: string, note: string)   => Promise<void>;
 }
 
 export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
@@ -76,9 +71,10 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     async function setup() {
       // Phase 1: バトル開始 → "in_progress" レコードを追加
       const fn1 = await listen<MatchDetectedPayload>('battle_started', async (event) => {
-        const raw = event.payload.match_data;
+        // ブキはキャプチャでは認識できないため、未入力なら前回使用したブキを補完する
+        const raw: RawMatch = { ...event.payload.match_data, weapon: event.payload.match_data.weapon ?? getLastWeaponName() };
         try {
-          await insertMatch(raw);
+          await insertMatch(raw, true);
         } catch (e) {
           console.error('[useMatches] insertMatch(in_progress) failed:', e);
         }
@@ -118,7 +114,7 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
 
   // ── 手動追加 ─────────────────────────────────────────────────
   const addMatch = useCallback(async (raw: RawMatch) => {
-    await insertMatch(raw);
+    await insertMatch(raw, false);
     setMatches((prev) => [parseMatch(raw), ...prev]);
   }, []);
 
@@ -140,21 +136,5 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches([]);
   }, []);
 
-  // ── 更新操作 ─────────────────────────────────────────────────
-  const updateWeapon = useCallback(async (id: string, weapon: string) => {
-    await dbUpdateWeapon(id, weapon);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, weapon } : m)));
-  }, []);
-
-  const updateTags = useCallback(async (id: string, tags: string[]) => {
-    await dbUpdateTags(id, tags);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, tags } : m)));
-  }, []);
-
-  const updateNote = useCallback(async (id: string, note: string) => {
-    await dbUpdateNote(id, note);
-    setMatches((prev) => prev.map((m) => (m.id === id ? { ...m, note } : m)));
-  }, []);
-
-  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, clearAllMatches, updateWeapon, updateTags, updateNote };
+  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, clearAllMatches };
 }

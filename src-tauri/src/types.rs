@@ -21,12 +21,15 @@ pub struct Match {
     pub kill_count: Option<i64>,
     pub death_count: Option<i64>,
     pub special_count: Option<i64>,
+    pub paint_count: Option<i64>,
     pub xp_after: Option<f64>,
     pub gold_award_count: Option<i64>,
     pub tags: Option<String>, // JSON 配列文字列
     pub note: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub crop_image_base64: Option<String>,
+    pub crop_image_header_base64: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +51,7 @@ pub struct ExtractedMatchData {
     pub kill_count: Option<i64>,
     pub death_count: Option<i64>,
     pub special_count: Option<i64>,
+    pub paint_count: Option<i64>,
     pub xp_after: Option<f64>,
     pub rule: Option<String>,
     pub stage: Option<String>,
@@ -133,14 +137,106 @@ pub struct YoloDebugDetection {
     pub y2: f32,
 }
 
-/// OCR デバッグ: 1フィールド分の生テキスト + 正規化後
+/// OCR デバッグ: 1フィールド分の生テキスト + 正規化後 + クロップ画像 (base64 PNG)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrDebugField {
     pub raw: String,
     pub normalized: Option<String>,
+    pub crop_image_base64: Option<String>,
 }
 
-/// OCR デバッグ: YOLO 検出領域から読んだ全フィールド
+/// カスケードデバッグ: Model 2 の1検出エントリ（グループ割り当て付き）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CascadeDebugDetection {
+    pub class_name:  String,
+    pub confidence:  f32,
+    pub x_center:    f32,
+    /// "paint" | "kill" | "death" | "special" | "anchor_kill" | "anchor_death" | "anchor_special" | "ignored"
+    pub group:       String,
+}
+
+/// カスケードデバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CascadeDebugResult {
+    pub frame_w:            u32,
+    pub frame_h:            u32,
+    pub stats_model_loaded: bool,
+    pub arrow_found:        bool,
+    pub crop_x:             u32,
+    pub crop_y:             u32,
+    pub crop_w:             u32,
+    pub crop_h:             u32,
+    /// クロップ画像の base64 PNG (フロントエンド表示用)
+    pub crop_image_base64:  Option<String>,
+    /// Model 2 の全検出 (x_center 昇順)
+    pub detections:         Vec<CascadeDebugDetection>,
+    pub kill_anchor_x:      Option<f32>,
+    pub death_anchor_x:     Option<f32>,
+    pub special_anchor_x:   Option<f32>,
+    pub paint:              Option<i64>,
+    pub kill:               Option<i64>,
+    pub death:              Option<i64>,
+    pub special:            Option<i64>,
+    pub error:              Option<String>,
+}
+
+/// ヘッダーカスケードデバッグ: Model 2 の1検出エントリ（モード/ルール/ステージ判定用、グループなし）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderDebugDetection {
+    pub class_name: String,
+    pub confidence: f32,
+    pub x_center:   f32,
+}
+
+/// ヘッダーカスケードデバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderDebugResult {
+    pub frame_w:           u32,
+    pub frame_h:           u32,
+    pub crop_x:            u32,
+    pub crop_y:            u32,
+    pub crop_w:            u32,
+    pub crop_h:            u32,
+    /// クロップ画像の base64 PNG (フロントエンド表示用)
+    pub crop_image_base64: Option<String>,
+    /// Model 2 の全検出 (確信度降順)
+    pub detections:        Vec<HeaderDebugDetection>,
+    pub mode:              Option<String>,
+    pub rule:              Option<String>,
+    pub stage:             Option<String>,
+    pub error:             Option<String>,
+}
+
+/// YOLO + カスケード統合デバッグコマンドの戻り値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullDebugResult {
+    pub frame_w:            u32,
+    pub frame_h:            u32,
+    // Model 1 (yolo_result.onnx)
+    pub model1_loaded:      bool,
+    pub detections:         Vec<YoloDebugDetection>,
+    pub ocr:                Option<OcrDebugResult>,
+    // Cascade / Model 2 (yolo_stats.onnx) — KDA カスケード
+    pub model2_loaded:      bool,
+    pub arrow_found:        bool,
+    pub crop_x:             u32,
+    pub crop_y:             u32,
+    pub crop_w:             u32,
+    pub crop_h:             u32,
+    pub crop_image_base64:  Option<String>,
+    pub cascade_detections: Vec<CascadeDebugDetection>,
+    pub kill_anchor_x:      Option<f32>,
+    pub death_anchor_x:     Option<f32>,
+    pub special_anchor_x:   Option<f32>,
+    pub paint:              Option<i64>,
+    pub kill:               Option<i64>,
+    pub death:              Option<i64>,
+    pub special:            Option<i64>,
+    pub error:              Option<String>,
+    // ヘッダーカスケード (モード/ルール/ステージ)
+    pub header:             HeaderDebugResult,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrDebugResult {
     pub rule:    OcrDebugField,

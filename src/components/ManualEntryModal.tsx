@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { RULES, PRESET_TAGS } from '../types';
 import { WeaponPicker } from './WeaponPicker';
+import { getLastWeaponName } from '../assets/weapons';
 import type { Match, RawMatch } from '../types';
 
 const MODES = [
@@ -30,7 +31,14 @@ const STAGES = [
   '海女美術大学',
   'オヒョウ海運',
   'バイガイ亭',
-  '万国博覧会',
+  'ナンプラー遺跡',
+  'マンタマリア号',
+  'コンブトラック',
+  'タカアシ経済特区',
+  'ネギトロ炭鉱',
+  'カジキ空港',
+  'リュウグウターミナル',
+  'デカライン高架下',
 ];
 
 interface Props {
@@ -40,12 +48,17 @@ interface Props {
   onSubmit: (match: RawMatch) => Promise<void>;
 }
 
+function toLocalDatetimeString(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   const isEdit = initialMatch != null;
-  const nowStr = new Date().toISOString().slice(0, 16);
+  const nowStr = toLocalDatetimeString(new Date());
 
   const [playedAt, setPlayedAt] = useState(
-    isEdit ? new Date(initialMatch.played_at).toISOString().slice(0, 16) : nowStr,
+    isEdit ? toLocalDatetimeString(new Date(initialMatch.played_at)) : nowStr,
   );
   const [result, setResult] = useState<'win' | 'lose'>(
     initialMatch?.result === 'lose' ? 'lose' : 'win',
@@ -53,7 +66,7 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   const [mode, setMode] = useState(initialMatch?.mode ?? 'Xマッチ');
   const [rule, setRule] = useState<string>(initialMatch?.rule ?? RULES[0]);
   const [stage, setStage] = useState(initialMatch?.stage ?? '');
-  const [weapon, setWeapon] = useState<string | null>(initialMatch?.weapon ?? null);
+  const [weapon, setWeapon] = useState<string | null>(initialMatch?.weapon ?? getLastWeaponName());
   const [kill, setKill] = useState(
     initialMatch?.kill_count != null ? String(initialMatch.kill_count) : '',
   );
@@ -62,6 +75,9 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
   );
   const [special, setSpecial] = useState(
     initialMatch?.special_count != null ? String(initialMatch.special_count) : '',
+  );
+  const [paint, setPaint] = useState(
+    initialMatch?.paint_count != null ? String(initialMatch.paint_count) : '',
   );
   const [xp, setXp] = useState(
     initialMatch?.xp_after != null ? String(initialMatch.xp_after) : '',
@@ -85,11 +101,12 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
       rule: rule || null,
       stage: stage || null,
       weapon: weapon || null,
-      kill_count: kill !== '' ? parseInt(kill, 10) : null,
-      death_count: death !== '' ? parseInt(death, 10) : null,
-      special_count: special !== '' ? parseInt(special, 10) : null,
+      kill_count: kill !== '' && Number.isFinite(parseInt(kill, 10)) ? parseInt(kill, 10) : null,
+      death_count: death !== '' && Number.isFinite(parseInt(death, 10)) ? parseInt(death, 10) : null,
+      special_count: special !== '' && Number.isFinite(parseInt(special, 10)) ? parseInt(special, 10) : null,
       xp_after: xp !== '' ? parseFloat(xp) : null,
       gold_award_count: initialMatch?.gold_award_count ?? null,
+      paint_count: paint !== '' && Number.isFinite(parseInt(paint, 10)) ? parseInt(paint, 10) : null,
       tags: JSON.stringify(tags),
       note: note || null,
     };
@@ -121,6 +138,31 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
         </div>
 
         <div className="p-5 space-y-4">
+          {/* OCR認識時のキャプチャ画像（自動記録分のみ表示） */}
+          {isEdit && (initialMatch?.crop_image_header_base64 || initialMatch?.crop_image_base64) && (
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">認識時のキャプチャ画像</label>
+              <div className="space-y-1">
+                {initialMatch?.crop_image_header_base64 && (
+                  <img
+                    src={`data:image/png;base64,${initialMatch.crop_image_header_base64}`}
+                    alt="ヘッダー"
+                    className="w-full rounded border border-slate-600"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                )}
+                {initialMatch?.crop_image_base64 && (
+                  <img
+                    src={`data:image/png;base64,${initialMatch.crop_image_base64}`}
+                    alt="スタッツ"
+                    className="w-full rounded border border-slate-600"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 日時 */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">日時</label>
@@ -238,6 +280,19 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* 塗ポイント */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">塗ポイント</label>
+            <input
+              type="number"
+              min="0"
+              className="w-full bg-slate-700 text-white rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500"
+              value={paint}
+              onChange={(e) => setPaint(e.target.value)}
+              placeholder="例: 1200"
+            />
           </div>
 
           {/* XP */}

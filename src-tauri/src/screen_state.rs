@@ -69,7 +69,7 @@ impl ScreenState {
 // ---------------------------------------------------------------------------
 
 /// InGame タイムアウト: この時間を超えてもリザルトが来なければ WaitingForBattle へ戻す
-const IN_GAME_TIMEOUT_SECS: u64 = 600;
+const IN_GAME_TIMEOUT_SECS: u64 = 900;
 
 /// ResultScreen 滞留タイムアウト: OCR が終わらなくても強制復帰
 const RESULT_SCREEN_TIMEOUT_SECS: u64 = 30;
@@ -91,33 +91,38 @@ impl ScreenStateMachine {
     // ── 遷移メソッド ──────────────────────────────────────────────────────
 
     /// バトル開始を検知 → InGame へ遷移。
-    /// すでに InGame 以降の状態にある場合は何もしない (二重発火防止)。
+    /// どの状態からでも呼び出せるが、20秒のクールダウンを設ける。
     pub fn on_battle_started(&mut self, match_id: String) -> bool {
-        match &self.state {
-            ScreenState::WaitingForBattle => {
-                log::info!("[state] WaitingForBattle → InGame (match_id={})", match_id);
-                self.state = ScreenState::InGame {
-                    match_id,
-                    started_at: Instant::now(),
-                };
-                true
+        let now = Instant::now();
+        let last_event_time = match &self.state {
+            ScreenState::Idle => None,
+            ScreenState::WaitingForBattle => None,
+            ScreenState::InGame { started_at, .. } => Some(*started_at),
+            ScreenState::ResultScreen { detected_at, .. } => Some(*detected_at),
+            ScreenState::XPowerScreen { detected_at, .. } => Some(*detected_at),
+        };
+
+        if let Some(last_time) = last_event_time {
+            if now.duration_since(last_time).as_secs() < 20 {
+                return false; // クールダウン中
             }
-            _ => false,
         }
+
+        log::info!("[state] {} -> InGame (match_id={})", self.state.name(), match_id);
+        self.state = ScreenState::InGame {
+            match_id,
+            started_at: now,
+        };
+        true
     }
 
-    /// リザルト画面を検知 → ResultScreen へ遷移。
-    /// 現在の match_id を返す。
+    /// リザルト画面を検知。
+    /// InGame 中であれば match_id を返し、状態は変更しない。
     pub fn on_result_detected(&mut self) -> Option<String> {
         match &self.state {
             ScreenState::InGame { match_id, .. } => {
-                let id = match_id.clone();
-                log::info!("[state] InGame → ResultScreen (match_id={})", id);
-                self.state = ScreenState::ResultScreen {
-                    match_id:    id.clone(),
-                    detected_at: Instant::now(),
-                };
-                Some(id)
+                log::debug!("[state] Result detected while InGame (match_id={})", match_id);
+                Some(match_id.clone())
             }
             _ => None,
         }
@@ -137,12 +142,6 @@ impl ScreenStateMachine {
             }
             _ => None,
         }
-    }
-
-    /// 何らかの終了処理が完了 → WaitingForBattle へ戻す。
-    pub fn on_done(&mut self) {
-        log::info!("[state] {} → WaitingForBattle", self.state.name());
-        self.state = ScreenState::WaitingForBattle;
     }
 
     // ── タイムアウト確認 ───────────────────────────────────────────────────
@@ -215,38 +214,32 @@ mod tests {
     }
 
     #[test]
-    fn test_result_detected_transition() {
+    fn test_result_detected_returns_id_stays_ingame() {
         let mut sm = ScreenStateMachine::new();
         sm.on_battle_started("match-001".to_string());
         let id = sm.on_result_detected();
         assert_eq!(id.as_deref(), Some("match-001"));
-        assert!(matches!(sm.state(), ScreenState::ResultScreen { .. }));
+        // on_result_detected は状態遷移しない（InGame のまま）
+        assert!(matches!(sm.state(), ScreenState::InGame { .. }));
     }
 
     #[test]
     fn test_result_detected_without_ingame() {
         let mut sm = ScreenStateMachine::new();
-        // WaitingForBattle 中にリザルトが来ても遷移しない
+        // WaitingForBattle 中にリザルトが来ても None
         assert!(sm.on_result_detected().is_none());
         assert!(matches!(sm.state(), ScreenState::WaitingForBattle));
     }
 
     #[test]
-    fn test_done_resets_to_waiting() {
+    fn test_battle_start_cooldown() {
         let mut sm = ScreenStateMachine::new();
-        sm.on_battle_started("match-001".to_string());
-        sm.on_result_detected();
-        sm.on_done();
-        assert!(matches!(sm.state(), ScreenState::WaitingForBattle));
-    }
-
-    #[test]
-    fn test_x_match_transition() {
-        let mut sm = ScreenStateMachine::new();
-        sm.on_battle_started("match-xp".to_string());
-        sm.on_result_detected();
-        let id = sm.on_result_extracted_x_match();
-        assert_eq!(id.as_deref(), Some("match-xp"));
-        assert!(matches!(sm.state(), ScreenState::XPowerScreen { .. }));
+        // 1回目は成功
+        assert!(sm.on_battle_started("match-001".to_string()));
+        assert!(matches!(sm.state(), ScreenState::InGame { .. }));
+        // 20秒以内の再呼び出しはクールダウン中のため失敗
+        assert!(!sm.on_battle_started("match-002".to_string()));
+        // 状態は変わっていない
+        assert!(matches!(sm.state(), ScreenState::InGame { .. }));
     }
 }
