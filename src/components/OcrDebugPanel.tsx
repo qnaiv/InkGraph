@@ -6,8 +6,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { OcrTestResult, CaptureDebugResult, WindowInfo, CaptureStatusPayload, YoloDebugResult, OcrDebugResult } from '../types';
 
-export function OcrDebugPanel() {
+export function OcrDebugPanel({ onDeleteAll }: { onDeleteAll?: () => Promise<void> | void }) {
   const [minimized, setMinimized] = useState(true);
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatusPayload | null>(null);
 
   useEffect(() => {
@@ -16,6 +17,23 @@ export function OcrDebugPanel() {
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  const handleDeleteAll = async () => {
+    // TODO: @tauri-apps/plugin-dialog の confirm() に置き換えると Tauri WebView でも動作する
+    //       現時点では package.json に @tauri-apps/plugin-dialog が未追加のため window.confirm を使用
+    const confirmed = window.confirm(
+      '全試合記録を削除します。\nこの操作は元に戻せません。よろしいですか？'
+    );
+    if (!confirmed) return;
+    setDeleteAllLoading(true);
+    try {
+      await onDeleteAll?.();
+    } catch (e) {
+      console.error('[OcrDebugPanel] clearAllMatches failed:', e);
+    } finally {
+      setDeleteAllLoading(false);
+    }
+  };
 
   // ── ファイル OCR ──────────────────────────────────────────────────────────
   const [imagePath, setImagePath] = useState('');
@@ -111,12 +129,21 @@ export function OcrDebugPanel() {
     <div className="fixed bottom-4 left-4 w-[420px] bg-slate-900 border border-amber-500/50 rounded-xl shadow-2xl p-4 z-50 text-sm space-y-5 max-h-[90vh] overflow-y-auto">
       <div className="flex items-center justify-between">
         <span className="text-amber-400 font-bold text-xs tracking-widest">🔬 DEBUG PANEL</span>
-        <button
-          className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
-          onClick={() => setMinimized(true)}
-        >
-          最小化
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/40 transition-colors disabled:opacity-50"
+            onClick={handleDeleteAll}
+            disabled={deleteAllLoading}
+          >
+            {deleteAllLoading ? '削除中…' : '全記録削除'}
+          </button>
+          <button
+            className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+            onClick={() => setMinimized(true)}
+          >
+            最小化
+          </button>
+        </div>
       </div>
 
       {/* ── 検知エンジン状態 ─────────────────────────────────────────────── */}
