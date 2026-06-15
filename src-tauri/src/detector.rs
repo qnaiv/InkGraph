@@ -587,7 +587,7 @@ mod tests {
 
 use crate::preprocess::letterbox_bgra;
 use ort::{session::{Session, builder::GraphOptimizationLevel}, value::Tensor};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::{atomic::Ordering, Arc}};
 
 // ---------------------------------------------------------------------------
 // クラス定義
@@ -699,7 +699,7 @@ pub struct YoloDetector {
     /// Roboflow がストレッチで学習したモデルに合わせるために Model 2 で使用。
     pub use_stretch: bool,
     /// 最初の推論でモデル情報をログ出力済みかどうか（インスタンスごと）。
-    has_logged_first: std::sync::atomic::AtomicBool,
+    has_logged_first: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl YoloDetector {
@@ -712,7 +712,7 @@ impl YoloDetector {
             iou_threshold:  DEFAULT_IOU_THRESHOLD,
             class_names:    None,
             use_stretch:    false,
-            has_logged_first: std::sync::atomic::AtomicBool::new(false),
+            has_logged_first: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -725,11 +725,13 @@ impl YoloDetector {
             iou_threshold:  DEFAULT_IOU_THRESHOLD,
             class_names:    Some(class_names),
             use_stretch:    false,
-            has_logged_first: std::sync::atomic::AtomicBool::new(false),
+            has_logged_first: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     pub fn is_loaded(&self) -> bool { self.session.is_some() }
+
+    pub fn model_path(&self) -> &PathBuf { &self.model_path }
 
     /// クロップ済み BGRA バッファを直接受け取る推論メソッド（カスケード用）。
     pub fn detect_bgra(&mut self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<Detection>> {
@@ -829,7 +831,6 @@ impl YoloDetector {
         let num_anchors = output_shape[2] as usize;       // 8400
 
         // モデルごとに初回のみ詳細ログ
-        use std::sync::atomic::Ordering;
         if !self.has_logged_first.swap(true, Ordering::Relaxed) {
             log::info!(
                 "[yolo] first detect: path={}, output_shape={:?}, nc={nc}, anchors={num_anchors}, stretch={}",

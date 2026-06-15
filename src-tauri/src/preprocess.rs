@@ -168,7 +168,7 @@ pub fn stretch_bgra(
 ///
 /// スプラトゥーン3 のリザルト画面はインクエフェクト背景に白文字が重なるため、
 /// 「V (明度) が高く S (彩度) が低い = 白系」ピクセルを保持し他を黒に落とす。
-pub fn extract_white_text(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
+pub fn extract_white_text(bgra: &[u8], _width: u32, _height: u32) -> Vec<u8> {
     let mut out = vec![0u8; bgra.len()];
     for (i, chunk) in bgra.chunks_exact(4).enumerate() {
         let b = chunk[0] as f32;

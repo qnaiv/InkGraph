@@ -142,31 +142,64 @@ InkGraph は Splatoon 3 のXマッチ対戦記録を自動収集・可視化す�
 
 ## 5. キャプチャループ状態機械
 
-```
-[起動]
-  └─ pending_match_id = None
-  └─ battle_started_at = None
+`capture_loop.rs` は `ScreenStateMachine`（`screen_state.rs`）を使って画面状態を管理する。
 
-  ┌──────────────────────────────────────┐
-  │ loop (5 fps)                         │
-  │                                      │
-  │  [固着チェック]                       │
-  │  pending && elapsed >= 30分          │
-  │    → pending = None (強制リセット)    │
-  │                                      │
-  │  if pending == None                  │
-  │    BattleStart >= 0.50 ?             │
-  │      → pending = new UUID            │
-  │      → emit battle_started           │
-  │                                      │
-  │  else (pending != None)              │
-  │    BattleStart再検知? → warn ログ    │
-  │    elapsed >= 15s ?                  │
-  │      → Win/Lose/Draw/Arrow 判定      │
-  │      → 確定したら emit match_detected │
-  │      → pending = None               │
-  └──────────────────────────────────────┘
+### 状態定義
+
+| 状態 | 説明 |
+|---|---|
+| `WaitingForBattle` | 初期状態。バトル開始画面を待機中 |
+| `InGame { match_id, started_at }` | バトル中。リザルト画面を待機中 |
+| `ResultScreen` | (現在未使用) OCR 抽出中を想定した遷移先 |
+| `XPowerScreen` | (将来実装) Xパワー画面 |
+
+### ループ処理 (5 fps)
+
 ```
+loop (5 fps)
+  │
+  ├─ tick_timeouts()  ← InGame > 15分でタイムアウト → WaitingForBattle
+  │
+  ├─ Model 1 推論 (Arc<Mutex<YoloDetector>>.lock())
+  │
+  ├─ [毎フレーム] BattleStart 検知
+  │    conf >= 0.50 ?
+  │      → on_battle_started(new UUID)
+  │           クールダウン中 (20s) なら false 返却 → スキップ
+  │           それ以外 → InGame へ遷移 → emit battle_started
+  │
+  └─ [毎フレーム] リザルト画面検知
+       Win/Lose/Draw/MyArrow 判定
+       result_opt = Some("win"|"lose"|"draw") ?
+         → on_result_detected()
+              InGame 状態なら match_id を返す（状態は変化しない）
+              それ以外 → None → スキップ
+         → tokio::spawn で非同期抽出タスク開始
+              Arc<Mutex<StatsDetector>>.lock() → run_cascade / run_header_cascade
+              extract_from_yolo_detections()
+              → emit match_detected
+```
+
+### 重要な動作仕様
+
+- **BattleStart クールダウン**: `on_battle_started` は直前の状態遷移から 20 秒未満なら `false` を返し
+  二重検知を防ぐ。InGame/ResultScreen/XPowerScreen のいずれの状態でもこのクールダウンが適用される。
+- **リザルト検知は毎フレーム**: result_opt が確定した場合、`on_result_detected()` が InGame 中に
+  限り match_id を返す。状態は InGame のまま変化しない。つまり result screen が複数フレーム続く
+  場合、非同期抽出タスクが複数起動されるが、同じ match_id で `updateMatchResult` が呼ばれるため
+  DB 上は上書きとなり冪等。
+- **InGame タイムアウト**: `IN_GAME_TIMEOUT_SECS = 900` (15分)。リザルト未検知のまま 15 分を超えると
+  `WaitingForBattle` へ強制復帰する。
+- **非同期抽出**: リザルト確定後の Model 2 推論・データ抽出は `tokio::spawn` で別タスクとして実行。
+  メインループはブロックされない。
+
+### タイムアウト定数 (screen_state.rs)
+
+| 定数 | 値 | 説明 |
+|---|---|---|
+| `IN_GAME_TIMEOUT_SECS` | 900 | InGame → WaitingForBattle へのタイムアウト |
+| `RESULT_SCREEN_TIMEOUT_SECS` | 30 | ResultScreen タイムアウト (現在未到達) |
+| `XPOWER_SCREEN_TIMEOUT_SECS` | 30 | XPowerScreen タイムアウト (将来実装) |
 
 ---
 
