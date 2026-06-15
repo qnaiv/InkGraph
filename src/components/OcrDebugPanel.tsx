@@ -8,8 +8,9 @@ import type {
   FullDebugResult, OcrDebugResult, CascadeDebugDetection, HeaderDebugDetection,
 } from '../types';
 
-export function OcrDebugPanel() {
+export function OcrDebugPanel({ onDeleteAll }: { onDeleteAll?: () => Promise<void> | void }) {
   const [minimized, setMinimized] = useState(true);
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatusPayload | null>(null);
 
   useEffect(() => {
@@ -18,6 +19,21 @@ export function OcrDebugPanel() {
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  const handleDeleteAll = async () => {
+    const confirmed = window.confirm(
+      '全試合記録を削除します。\nこの操作は元に戻せません。よろしいですか？'
+    );
+    if (!confirmed) return;
+    setDeleteAllLoading(true);
+    try {
+      await onDeleteAll?.();
+    } catch (e) {
+      console.error('[OcrDebugPanel] clearAllMatches failed:', e);
+    } finally {
+      setDeleteAllLoading(false);
+    }
+  };
 
   // ── ウィンドウ選択 ────────────────────────────────────────────────────────
   const [windows, setWindows]   = useState<WindowInfo[]>([]);
@@ -133,12 +149,21 @@ export function OcrDebugPanel() {
               <span className="text-slate-500 text-xs">キャプチャ停止中</span>
             )}
           </div>
-          <button
-            className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
-            onClick={() => setMinimized(true)}
-          >
-            閉じる
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/40 transition-colors disabled:opacity-50"
+              onClick={handleDeleteAll}
+              disabled={deleteAllLoading}
+            >
+              {deleteAllLoading ? '削除中…' : '全記録削除'}
+            </button>
+            <button
+              className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+              onClick={() => setMinimized(true)}
+            >
+              閉じる
+            </button>
+          </div>
         </div>
 
         {/* スクロール可能なコンテンツ */}

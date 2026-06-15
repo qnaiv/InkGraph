@@ -172,6 +172,12 @@ export async function dbDeleteMatch(id: string): Promise<void> {
   await db.execute('DELETE FROM matches WHERE id = $1', [id]);
 }
 
+/** 全試合レコードを削除する */
+export async function dbDeleteAllMatches(): Promise<void> {
+  const db = await getDb();
+  await db.execute('DELETE FROM matches', []);
+}
+
 /** 全試合を取得する (件数上限なし) */
 export async function selectAllMatches(rule?: string | null): Promise<RawMatch[]> {
   const db = await getDb();
