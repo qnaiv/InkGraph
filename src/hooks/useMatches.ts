@@ -10,6 +10,7 @@ import {
   updateMatchResult,
   dbUpdateFullMatch,
   dbDeleteMatch,
+  dbDeleteAllMatches,
 } from '../lib/db';
 
 // ---------------------------------------------------------------------------
@@ -32,9 +33,10 @@ interface UseMatchesReturn {
   matches: Match[];
   isLoading: boolean;
   error: string | null;
-  addMatch:     (raw: RawMatch) => Promise<void>;
-  updateMatch:  (raw: RawMatch) => Promise<void>;
-  deleteMatch:  (id: string) => Promise<void>;
+  addMatch:        (raw: RawMatch) => Promise<void>;
+  updateMatch:     (raw: RawMatch) => Promise<void>;
+  deleteMatch:     (id: string) => Promise<void>;
+  clearAllMatches: () => Promise<void>;
 }
 
 export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
@@ -128,5 +130,11 @@ export function useMatches(ruleFilter?: Rule | null): UseMatchesReturn {
     setMatches((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
-  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch };
+  // ── 全削除操作 ────────────────────────────────────────────────
+  const clearAllMatches = useCallback(async () => {
+    await dbDeleteAllMatches();
+    setMatches([]);
+  }, []);
+
+  return { matches, isLoading, error, addMatch, updateMatch, deleteMatch, clearAllMatches };
 }

@@ -3,18 +3,18 @@
 /// 2つの抽出パスを提供する:
 ///
 ///   1. YOLO パス (extract_from_yolo_detections):
-///      YOLO が返した BBox を元にクロップ → 白文字抽出 → WinRT OCR
-///      モード (Xマッチ/ナワバリ等) も抽出できる
+///      Model 1 の BBox を元にクロップ → PaddleOCR → normalize
 ///
 ///   2. ピクセルフォールバックパス (extract_match_data):
-///      固定 ROI 座標でクロップ → WinRT OCR
+///      固定 ROI 座標でクロップ → PaddleOCR → normalize
 ///      YOLO モデルが未配置の場合に使用する
 
 use crate::{
     capture::CapturedFrame,
     detector::{crop_bgra, Detection, YoloClass, YoloDetector, Roi},
-    ocr::{ocr_from_bgra, preprocess_bgra},
-    preprocess::{extract_white_text, save_debug_png, upscale_2x},
+    ocr::ocr_from_bgra,
+    ocr_rec,
+    preprocess::{self, save_debug_png},
     types::{ExtractedMatchData, OcrDebugField, OcrDebugResult},
 };
 use anyhow::Result;
@@ -32,15 +32,23 @@ use anyhow::Result;
 pub fn extract_from_yolo_detections(
     frame:           &CapturedFrame,
     detections:      &[Detection],
-    result:          &str,                                   // "win" | "lose"
-    stats_override:  Option<crate::cascade::PlayerStats>,   // カスケード結果
-    header_override: Option<crate::cascade::HeaderInfo>,    // ヘッダー YOLO 結果
+    result:          &str,
+    stats_override:  Option<crate::cascade::PlayerStats>,
+    header_override: Option<crate::cascade::HeaderInfo>,
 ) -> Result<ExtractedMatchData> {
-    let rule  = header_override.as_ref().and_then(|h| h.rule.clone());
-    let stage = header_override.as_ref().and_then(|h| h.stage.clone());
-    let mode  = header_override.as_ref().and_then(|h| h.mode.clone());
+    // ヘッダー: header_override がある場合はそれを優先、なければ OCR で取得
+    let (ocr_rule, ocr_stage, ocr_mode) = extract_header_via_ocr(frame, detections);
+    let (rule, stage, mode) = if let Some(h) = header_override {
+        (
+            ocr_rule.or(h.rule),
+            ocr_stage.or(h.stage),
+            ocr_mode.or(h.mode),
+        )
+    } else {
+        (ocr_rule, ocr_stage, ocr_mode)
+    };
 
-    // KDA + 塗りポイント: カスケード結果があればそちらを優先、なければ固定列 OCR にフォールバック
+    // KDA + 塗りポイント: stats_override があればそちらを優先、なければ固定列 OCR
     let (kill_count, death_count, special_count, paint_count) =
         if let Some(s) = stats_override {
             (s.kill, s.death, s.special, s.paint)
@@ -64,11 +72,62 @@ pub fn extract_from_yolo_detections(
         death_count,
         special_count,
         paint_count,
-        xp_after: None, // フェーズ2 (Xパワー画面) で実装
+        xp_after: None,
         rule,
         stage,
         gold_award_count: Some(gold_award_count),
     })
+}
+
+/// YOLO BBox または固定 ROI から OCR でヘッダー情報を取得する。
+///
+/// OCR 生テキストは normalize_rule / normalize_stage / normalize_mode に通して
+/// 既定リストから最も一致度の高い値を選ぶ。直接 DB に保存することはしない。
+fn extract_header_via_ocr(
+    frame:      &CapturedFrame,
+    detections: &[Detection],
+) -> (Option<String>, Option<String>, Option<String>) {
+    let rule  = ocr_on_class(frame, detections, YoloClass::RuleText)
+        .or_else(|| ocr_on_fixed_roi(frame, &RULE_ROI))
+        .and_then(|t| normalize_rule(t.trim()));
+
+    let stage = ocr_on_class(frame, detections, YoloClass::StageText)
+        .or_else(|| ocr_on_fixed_roi(frame, &STAGE_ROI))
+        .and_then(|t| normalize_stage(t.trim()));
+
+    let mode = ocr_on_class(frame, detections, YoloClass::ModeText)
+        .or_else(|| ocr_on_fixed_roi(frame, &MODE_ROI))
+        .and_then(|t| normalize_mode(t.trim()));
+
+    (rule, stage, mode)
+}
+
+/// YOLO が検出した BBox を crop → PP-OCRv5 rec でテキストを返す。
+fn ocr_on_class(
+    frame:      &CapturedFrame,
+    dets:       &[Detection],
+    class:      YoloClass,
+) -> Option<String> {
+    let det = YoloDetector::best_detection(dets, class)?;
+    let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
+    let y1 = (det.bbox.y1 * frame.height as f32) as u32;
+    let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
+    let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
+    let w  = x2.saturating_sub(x1).max(1);
+    let h  = y2.saturating_sub(y1).max(1);
+    let crop = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
+    ocr_rec::recognize_bgra(&crop, w, h).ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 固定 ROI を crop → PP-OCRv5 rec でテキストを返す。
+fn ocr_on_fixed_roi(frame: &CapturedFrame, roi: &Roi) -> Option<String> {
+    let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
+    let crop = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    ocr_rec::recognize_bgra(&crop, w, h).ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +139,11 @@ const RULE_ROI: Roi = Roi {
 };
 const STAGE_ROI: Roi = Roi {
     x_ratio: 0.545, y_ratio: 0.060, w_ratio: 0.240, h_ratio: 0.058,
+};
+// ModeText YOLO BBox が未検出の場合の固定 ROI フォールバック。
+// 座標は実機で debug_full の ModeText BBox を確認して調整すること。
+const MODE_ROI: Roi = Roi {
+    x_ratio: 0.350, y_ratio: 0.055, w_ratio: 0.110, h_ratio: 0.060,
 };
 const XP_ROI: Roi = Roi {
     x_ratio: 0.455, y_ratio: 0.185, w_ratio: 0.180, h_ratio: 0.060,
@@ -99,15 +163,15 @@ pub fn extract_match_data(
 
     Ok(ExtractedMatchData {
         result: result.to_string(),
-        mode: None, // 固定 ROI パスではモード取得なし
+        mode: None,
         kill_count,
         death_count,
         special_count,
-        paint_count: None, // 固定 ROI パスでは塗りポイント取得なし
+        paint_count: None,
         xp_after,
         rule,
         stage,
-        gold_award_count: None, // ピクセルパスでは金表彰取得なし
+        gold_award_count: None,
     })
 }
 
@@ -117,8 +181,8 @@ pub fn extract_match_data(
 
 const KILL_COL_X:  f32 = 0.758;
 const DEATH_COL_X: f32 = 0.822;
-const SPEC_COL_X:  f32 = 0.863;
-const KDA_COL_W:   f32 = 0.048;
+const SPEC_COL_X:  f32 = 0.878; // 0.863 から右にシフト (特殊カウンターの実位置に合わせる)
+const KDA_COL_W:   f32 = 0.060; // 0.048 から拡大 (2桁数字をマージン込みで収める)
 const KDA_ROW_H:   f32 = 0.052;
 
 /// `y_ratio` はプレイヤー行の y 中心 (0.0–1.0)。
@@ -131,25 +195,22 @@ fn extract_kda(
     let deat_roi = Roi { x_ratio: DEATH_COL_X, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
     let spec_roi = Roi { x_ratio: SPEC_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H };
     Ok((
-        extract_integer_roi(frame, &kill_roi,  "en-US"),
-        extract_integer_roi(frame, &deat_roi,  "en-US"),
-        extract_integer_roi(frame, &spec_roi,  "en-US"),
+        extract_integer_roi(frame, &kill_roi),
+        extract_integer_roi(frame, &deat_roi),
+        extract_integer_roi(frame, &spec_roi),
     ))
 }
 
 fn extract_xp(frame: &CapturedFrame) -> Result<Option<f64>> {
     let (x, y, w, h) = XP_ROI.to_pixels(frame.width, frame.height);
     let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    // XP は数値のみで WinRT en-US が安定しているためそのまま使用
     let text = ocr_from_bgra(&roi, w, h, Some("en-US"))?.text;
     Ok(clean_numeric_text(&text).parse::<f64>().ok())
 }
 
 fn extract_rule(frame: &CapturedFrame) -> Option<String> {
-    let (x, y, w, h) = RULE_ROI.to_pixels(frame.width, frame.height);
-    let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let preprocessed = preprocess_bgra(&roi, w, h);
-    let text = ocr_from_bgra(&preprocessed, w, h, Some("ja-JP")).ok()?.text;
-    normalize_rule(text.trim())
+    normalize_rule(extract_rule_raw(frame).trim())
 }
 
 fn extract_stage(frame: &CapturedFrame) -> Option<String> {
@@ -159,32 +220,37 @@ fn extract_stage(frame: &CapturedFrame) -> Option<String> {
 /// ルール ROI の生 OCR テキストを返す（デバッグ・通常抽出共用）
 pub fn extract_rule_raw(frame: &CapturedFrame) -> String {
     let (x, y, w, h) = RULE_ROI.to_pixels(frame.width, frame.height);
-    let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let preprocessed = preprocess_bgra(&roi, w, h);
-    ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
-        .ok()
-        .map(|r| r.text.trim().to_string())
+    let crop = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    ocr_rec::recognize_bgra(&crop, w, h).ok()
+        .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
 
 /// ステージ ROI の生 OCR テキストを返す（デバッグ・通常抽出共用）
 pub fn extract_stage_raw(frame: &CapturedFrame) -> String {
     let (x, y, w, h) = STAGE_ROI.to_pixels(frame.width, frame.height);
-    let roi = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let preprocessed = preprocess_bgra(&roi, w, h);
-    ocr_from_bgra(&preprocessed, w, h, Some("ja-JP"))
-        .ok()
-        .map(|r| r.text.trim().to_string())
+    let crop = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    ocr_rec::recognize_bgra(&crop, w, h).ok()
+        .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
 
-fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi, lang: &str) -> Option<i64> {
+/// crop → PP-OCRv5 rec → 数字パース
+///
+/// 白テキスト前処理 (extract_white_text) を試みて数字が取れたらそれを採用。
+/// 取れなかった場合は前処理なし OCR にフォールバック。
+/// (理由: 死カウンターの赤い背景では "5" 等がアンチエイリアスで閾値割れして消えることがある)
+fn extract_integer_roi(frame: &CapturedFrame, roi: &Roi) -> Option<i64> {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
-    let text = ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()?.text;
-    clean_numeric_text(&text).parse::<i64>().ok()
+    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let white = preprocess::extract_white_text(&cropped, w, h);
+    let white_result = ocr_rec::recognize_bgra(&white, w, h).ok()
+        .and_then(|t| clean_numeric_text(&t).parse::<i64>().ok());
+    if white_result.is_some() {
+        return white_result;
+    }
+    ocr_rec::recognize_bgra(&cropped, w, h).ok()
+        .and_then(|t| clean_numeric_text(&t).parse::<i64>().ok())
 }
 
 fn clean_numeric_text(text: &str) -> String {
@@ -254,7 +320,6 @@ pub fn normalize_rule(raw: &str) -> Option<String> {
             }
         }
     }
-    // エイリアス一致失敗時のファジーフォールバック
     let rule_names = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
     if let Some(m) = fuzzy_best_match(raw.trim(), &rule_names, 0.30) {
         return Some(m.to_string());
@@ -275,14 +340,12 @@ pub fn normalize_stage(raw: &str) -> Option<String> {
         "ネギトロ炭鉱", "ショッツル鉱山", "デカライン高架下",
         "コンブトラック", "マヒマヒリゾート&スパ", "マンタマリア号", "タカアシ経済特区",
     ];
-    // 完全一致（高速パス）
     for s in STAGES {
         if trimmed.contains(s) { return Some(s.to_string()); }
         if trimmed.chars().count() >= 4 && s.contains(trimmed) {
             return Some(s.to_string());
         }
     }
-    // ファジーフォールバック（OCR 文字化け対応）
     fuzzy_best_match(trimmed, STAGES, 0.35).map(|s| s.to_string())
 }
 
@@ -290,11 +353,10 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() { return None; }
 
-    // 既知のモードエイリアスを先に確認（ファジー除外より優先）
     let candidates: &[(&str, &[&str])] = &[
         ("Xマッチ",                   &["Xマッチ", "X BATTLE", "Xバトル", "X MATCH"]),
         ("バンカラマッチ(チャレンジ)", &["チャレンジ", "CHALLENGE", "ANARCHY OPEN"]),
-        ("バンカラマッチ(オープン)",   &["オープン", "OPEN", "ANARCHY BATTLE", "バンカラ"]),
+        ("バンカラマッチ(オープン)",   &["オープン", "OPEN", "ANARCHY BATTLE", "バンカラ", "オーフン", "オーブン"]),
         ("ナワバリバトル",             &["ナワバリ", "TURF WAR"]),
         ("サーモンラン",               &["サーモン", "SALMON"]),
     ];
@@ -307,7 +369,6 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
         }
     }
 
-    // ModeText BBox がルール領域を誤検知した場合を除外（完全一致 + ファジー）
     let rule_names_exact = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ",
                              "AREA", "TOWER", "RAINMAKER", "CLAM"];
     let upper_raw = raw.to_uppercase();
@@ -317,7 +378,11 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
     let rule_names_fuzzy = ["ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ"];
     if fuzzy_best_match(trimmed, &rule_names_fuzzy, 0.35).is_some() { return None; }
 
-    None
+    const MODE_NAMES: &[&str] = &[
+        "Xマッチ", "バンカラマッチ(チャレンジ)",
+        "バンカラマッチ(オープン)", "ナワバリバトル",
+    ];
+    fuzzy_best_match(trimmed, MODE_NAMES, 0.40).map(|s| s.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -326,78 +391,120 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
 
 /// YOLO 検出結果を使って全フィールドの OCR 生テキストと正規化値を返す。
 /// debug_yolo コマンドから呼ばれる。ブロッキング呼び出しのため block_in_place 必須。
-/// 前処理各段階の画像を %TEMP%\inkgraph_ocr_debug\ に PNG として保存する。
-pub fn extract_debug_ocr(frame: &CapturedFrame, detections: &[Detection]) -> OcrDebugResult {
-    let rule_raw  = bbox_to_raw_text_debug(frame, detections, YoloClass::RuleText,  "ja-JP", "rule");
-    let stage_raw = bbox_to_raw_text_debug(frame, detections, YoloClass::StageText, "ja-JP", "stage");
-    let mode_raw  = bbox_to_raw_text_debug(frame, detections, YoloClass::ModeText,  "ja-JP", "mode");
+/// `cascade_kda`: Model 2 カスケードで取得した (kill, death, special)。
+/// Some の場合は固定 ROI OCR の normalized を上書きする。
+///
+/// `kda_anchors`: cascade が検出した (kill_x, death_x, special_x) アイコン中心の正規化 X 座標。
+/// Some の場合はハードコード定数の代わりにアンカーを中心としたクロップを行う。
+pub fn extract_debug_ocr(
+    frame:       &CapturedFrame,
+    detections:  &[Detection],
+    cascade_kda: Option<(Option<i64>, Option<i64>, Option<i64>)>,
+    kda_anchors: Option<(Option<f32>, Option<f32>, Option<f32>)>,
+) -> OcrDebugResult {
+    let (rule_raw,  rule_crop)  = bbox_to_raw_text_debug(frame, detections, YoloClass::RuleText,  "rule");
+    let (stage_raw, stage_crop) = bbox_to_raw_text_debug(frame, detections, YoloClass::StageText, "stage");
+    let (mode_raw,  mode_crop)  = bbox_to_raw_text_debug(frame, detections, YoloClass::ModeText,  "mode");
 
     let arrow_y = YoloDetector::best_detection(detections, YoloClass::MyArrow)
         .map(|d| (d.bbox.y1 + d.bbox.y2) / 2.0);
 
-    let (kill_raw, death_raw, special_raw) = arrow_y.map(|y| {
+    // アンカーが取れている列はアンカー中心を使い、取れていない列はハードコード定数で補完する
+    let anchor_x = |default: f32, anchor: Option<Option<f32>>| -> f32 {
+        anchor.and_then(|a| a)
+            .map(|a| (a - KDA_COL_W / 2.0).max(0.0))
+            .unwrap_or(default)
+    };
+    let (kill_x, death_x, spec_x) = match kda_anchors {
+        Some((k, d, s)) => (
+            anchor_x(KILL_COL_X,  Some(k)),
+            anchor_x(DEATH_COL_X, Some(d)),
+            anchor_x(SPEC_COL_X,  Some(s)),
+        ),
+        None => (KILL_COL_X, DEATH_COL_X, SPEC_COL_X),
+    };
+
+    let ((kill_raw, kill_crop), (death_raw, death_crop), (special_raw, special_crop))
+        = arrow_y.map(|y| {
         let y_top = (y - KDA_ROW_H / 2.0).max(0.0);
         (
-            roi_to_raw_debug(frame, &Roi { x_ratio: KILL_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "kill"),
-            roi_to_raw_debug(frame, &Roi { x_ratio: DEATH_COL_X, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "death"),
-            roi_to_raw_debug(frame, &Roi { x_ratio: SPEC_COL_X,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "en-US", "special"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: kill_x,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "kill"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: death_x, y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "death"),
+            roi_to_raw_debug(frame, &Roi { x_ratio: spec_x,  y_ratio: y_top, w_ratio: KDA_COL_W, h_ratio: KDA_ROW_H }, "special"),
         )
     }).unwrap_or_default();
 
+    // cascade_kda が Some の場合はその値を normalized に使う。
+    // None の場合は固定 ROI OCR 結果にフォールバック。
+    let (cas_kill, cas_death, cas_special) = cascade_kda
+        .unwrap_or((None, None, None));
+    let kill_norm    = cas_kill.map(|v| v.to_string())
+        .or_else(|| clean_numeric_text(&kill_raw).parse::<i64>().ok().map(|v| v.to_string()));
+    let death_norm   = cas_death.map(|v| v.to_string())
+        .or_else(|| clean_numeric_text(&death_raw).parse::<i64>().ok().map(|v| v.to_string()));
+    let special_norm = cas_special.map(|v| v.to_string())
+        .or_else(|| clean_numeric_text(&special_raw).parse::<i64>().ok().map(|v| v.to_string()));
+
     OcrDebugResult {
-        rule:    OcrDebugField { normalized: normalize_rule(&rule_raw),   raw: rule_raw  },
-        stage:   OcrDebugField { normalized: normalize_stage(&stage_raw), raw: stage_raw },
-        mode:    OcrDebugField { normalized: normalize_mode(&mode_raw),   raw: mode_raw  },
-        kill:    OcrDebugField { normalized: clean_numeric_text(&kill_raw).parse::<i64>().ok().map(|v| v.to_string()),    raw: kill_raw    },
-        death:   OcrDebugField { normalized: clean_numeric_text(&death_raw).parse::<i64>().ok().map(|v| v.to_string()),  raw: death_raw   },
-        special: OcrDebugField { normalized: clean_numeric_text(&special_raw).parse::<i64>().ok().map(|v| v.to_string()), raw: special_raw },
+        rule:    OcrDebugField { normalized: normalize_rule(&rule_raw),   raw: rule_raw,   crop_image_base64: rule_crop   },
+        stage:   OcrDebugField { normalized: normalize_stage(&stage_raw), raw: stage_raw,  crop_image_base64: stage_crop  },
+        mode:    OcrDebugField { normalized: normalize_mode(&mode_raw),   raw: mode_raw,   crop_image_base64: mode_crop   },
+        kill:    OcrDebugField { normalized: kill_norm,    raw: kill_raw,    crop_image_base64: kill_crop    },
+        death:   OcrDebugField { normalized: death_norm,   raw: death_raw,   crop_image_base64: death_crop   },
+        special: OcrDebugField { normalized: special_norm, raw: special_raw, crop_image_base64: special_crop },
         arrow_y,
     }
 }
 
-/// デバッグ版: クロップ・白抽出・アップスケール後の画像を PNG 保存しつつ OCR する。
-fn bbox_to_raw_text_debug(frame: &CapturedFrame, detections: &[Detection], class: YoloClass, lang: &str, label: &str) -> String {
-    let Some(det) = YoloDetector::best_detection(detections, class) else { return String::new(); };
+/// BGRA バイト列を PNG にエンコードして base64 文字列で返す (フロントエンド表示用)。
+fn encode_crop_base64(bgra: &[u8], width: u32, height: u32) -> Option<String> {
+    let rgba: Vec<u8> = bgra.chunks_exact(4)
+        .flat_map(|c| [c[2], c[1], c[0], c[3]])
+        .collect();
+    let img = image::RgbaImage::from_raw(width, height, rgba)?;
+    let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+    img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+    use base64::Engine as _;
+    Some(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
+/// デバッグ版: YOLO BBox を crop → OCR → (テキスト, base64クロップ画像) を返す。
+fn bbox_to_raw_text_debug(
+    frame:      &CapturedFrame,
+    detections: &[Detection],
+    class:      YoloClass,
+    label:      &str,
+) -> (String, Option<String>) {
+    let Some(det) = YoloDetector::best_detection(detections, class) else { return (String::new(), None); };
     let x1 = (det.bbox.x1 * frame.width  as f32) as u32;
     let y1 = (det.bbox.y1 * frame.height as f32) as u32;
     let x2 = ((det.bbox.x2 * frame.width  as f32) as u32).min(frame.width.saturating_sub(1));
     let y2 = ((det.bbox.y2 * frame.height as f32) as u32).min(frame.height.saturating_sub(1));
     let w  = x2.saturating_sub(x1).max(1);
     let h  = y2.saturating_sub(y1).max(1);
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
+    let cropped = crop_bgra(&frame.bgra, frame.width, x1, y1, w, h);
     save_debug_png(&format!("{label}_1crop"), &cropped, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    save_debug_png(&format!("{label}_2white"), &preprocessed, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
-    save_debug_png(&format!("{label}_3upscale"), &upscaled, uw, uh);
-    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
-        .map(|r| r.text.trim().to_string())
-        .unwrap_or_default()
+    let text = ocr_rec::recognize_bgra(&cropped, w, h).unwrap_or_default();
+    let crop = encode_crop_base64(&cropped, w, h);
+    (text, crop)
 }
 
-/// デバッグ版: ROI クロップ各段階を PNG 保存しつつ OCR する。
-fn roi_to_raw_debug(frame: &CapturedFrame, roi: &Roi, lang: &str, label: &str) -> String {
+/// デバッグ版: ROI を crop → OCR → (テキスト, base64クロップ画像) を返す (KDA 用)。
+fn roi_to_raw_debug(frame: &CapturedFrame, roi: &Roi, label: &str) -> (String, Option<String>) {
     let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
+    let cropped = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
     save_debug_png(&format!("{label}_1crop"), &cropped, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    save_debug_png(&format!("{label}_2white"), &preprocessed, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
-    save_debug_png(&format!("{label}_3upscale"), &upscaled, uw, uh);
-    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
-        .map(|r| r.text.trim().to_string())
-        .unwrap_or_default()
-}
-
-/// ROI → OCR 生テキスト (前処理なし、数値用)。
-fn roi_to_raw(frame: &CapturedFrame, roi: &Roi, lang: &str) -> String {
-    let (x, y, w, h) = roi.to_pixels(frame.width, frame.height);
-    let cropped      = crop_bgra(&frame.bgra, frame.width, x, y, w, h);
-    let preprocessed = extract_white_text(&cropped, w, h);
-    let (upscaled, uw, uh) = upscale_2x(&preprocessed, w, h);
-    ocr_from_bgra(&upscaled, uw, uh, Some(lang)).ok()
-        .map(|r| r.text.trim().to_string())
-        .unwrap_or_default()
+    let white = preprocess::extract_white_text(&cropped, w, h);
+    save_debug_png(&format!("{label}_2white"), &white, w, h);
+    // extract_integer_roi と同じ 2 段パス (白テキスト → raw)
+    let white_text = ocr_rec::recognize_bgra(&white, w, h).unwrap_or_default();
+    let text = if clean_numeric_text(&white_text).parse::<i64>().is_ok() {
+        white_text
+    } else {
+        ocr_rec::recognize_bgra(&cropped, w, h).unwrap_or_default()
+    };
+    let crop = encode_crop_base64(&cropped, w, h);
+    (text, crop)
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +522,6 @@ mod tests {
         assert_eq!(normalize_rule("AREA"),       Some("ガチエリア".to_string()));
         assert_eq!(normalize_rule("ガチヤグラ"), Some("ガチヤグラ".to_string()));
         assert_eq!(normalize_rule("RAINMAKER"),  Some("ガチホコ".to_string()));
-        // ファジーマッチ: OCR 文字化け対応
         assert_eq!(normalize_rule("ヤグ"),       Some("ガチヤグラ".to_string()));
     }
 
@@ -424,7 +530,6 @@ mod tests {
         assert_eq!(normalize_stage("マテガイ放水路"), Some("マテガイ放水路".to_string()));
         assert_eq!(normalize_stage("ナメロウ金属"),   Some("ナメロウ金属".to_string()));
         assert_eq!(normalize_stage(""),               None);
-        // ファジーマッチ: OCR 文字化け対応
         assert_eq!(normalize_stage("リュウグウラ - ミカ↓"), Some("リュウグウターミナル".to_string()));
         assert_eq!(normalize_stage("デカライン高架下"),      Some("デカライン高架下".to_string()));
     }
@@ -438,37 +543,39 @@ mod tests {
         assert_eq!(normalize_mode("ナワバリ"),       Some("ナワバリバトル".to_string()));
         assert_eq!(normalize_mode("TURF WAR"),       Some("ナワバリバトル".to_string()));
         assert_eq!(normalize_mode(""),               None);
-        // ModeText がルール名を読んだ場合は None（YOLO 誤検知）
         assert_eq!(normalize_mode("多ャグラ"),       None);
         assert_eq!(normalize_mode("ガチヤグラ"),     None);
     }
 
     #[test]
     fn test_char_recall() {
-        // リュウグウターミナル に対する "リュウグウラ - ミカ↓" の recall
         let score = char_recall("リュウグウターミナル", "リュウグウラ - ミカ↓");
         assert!(score >= 0.35, "recall={score}");
-        // ガチヤグラ に対する "ヤグ" の recall
         let score2 = char_recall("ガチヤグラ", "ヤグ");
         assert!(score2 >= 0.30, "recall={score2}");
-        // 小書きカタカナ正規化: "多ャグう" は "多ヤグウ" に正規化され recall≥0.35
         let score3 = char_recall("ガチヤグラ", "多ャグう");
         assert!(score3 >= 0.35, "recall={score3}");
     }
 
     #[test]
     fn test_normalize_mode_garbled() {
-        // OCR 文字化けでもルール文字列として除外される
         assert_eq!(normalize_mode("多ャグう"), None);
-        // 完全にランダムなゴミは None
         assert_eq!(normalize_mode("zzzz"), None);
     }
 
     #[test]
+    fn test_normalize_mode_ocr_errors() {
+        // "プ"→"フ" 誤読 ("オープン"→"オーフン")
+        assert_eq!(normalize_mode("オーフン"), Some("バンカラマッチ(オープン)".to_string()));
+        // 実際の PP-OCRv5 誤読例: "バンカラマッチ(オープン)" → "バンッチ(オーフン)"
+        assert_eq!(normalize_mode("バンッチ(オーフン)"), Some("バンカラマッチ(オープン)".to_string()));
+        // ルール名は依然として None を返す
+        assert_eq!(normalize_mode("ガチヤグラ"), None);
+    }
+
+    #[test]
     fn test_normalize_rule_garbled() {
-        // OCR 文字化けで全くマッチしない場合は None
         assert_eq!(normalize_rule("多ャワう"), None);
-        // 小書きカタカナ: ャグ→ヤグ で ガチヤグラ にマッチ
         assert_eq!(normalize_rule("多ャグう"), Some("ガチヤグラ".to_string()));
     }
 

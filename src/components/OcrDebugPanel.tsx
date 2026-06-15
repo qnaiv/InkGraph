@@ -8,8 +8,9 @@ import type {
   FullDebugResult, OcrDebugResult, CascadeDebugDetection, HeaderDebugDetection,
 } from '../types';
 
-export function OcrDebugPanel() {
+export function OcrDebugPanel({ onDeleteAll }: { onDeleteAll?: () => Promise<void> | void }) {
   const [minimized, setMinimized] = useState(true);
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatusPayload | null>(null);
 
   useEffect(() => {
@@ -18,6 +19,21 @@ export function OcrDebugPanel() {
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  const handleDeleteAll = async () => {
+    const confirmed = window.confirm(
+      '全試合記録を削除します。\nこの操作は元に戻せません。よろしいですか？'
+    );
+    if (!confirmed) return;
+    setDeleteAllLoading(true);
+    try {
+      await onDeleteAll?.();
+    } catch (e) {
+      console.error('[OcrDebugPanel] clearAllMatches failed:', e);
+    } finally {
+      setDeleteAllLoading(false);
+    }
+  };
 
   // ── ウィンドウ選択 ────────────────────────────────────────────────────────
   const [windows, setWindows]   = useState<WindowInfo[]>([]);
@@ -56,6 +72,21 @@ export function OcrDebugPanel() {
       setFullResult(await invoke<FullDebugResult>('debug_full', { hwnd: diagHwnd }));
     } catch (e) { setFullError(String(e)); }
     finally { setFullLoading(false); }
+  };
+
+  // ── ファイルから全パイプライン診断 (WGC 不使用) ─────────────────────────
+  const [fileFullPath, setFileFullPath]     = useState('');
+  const [fileFullResult, setFileFullResult] = useState<FullDebugResult | null>(null);
+  const [fileFullError, setFileFullError]   = useState<string | null>(null);
+  const [fileFullLoading, setFileFullLoading] = useState(false);
+
+  const runFileFullDiag = async () => {
+    if (!fileFullPath.trim()) return;
+    setFileFullLoading(true); setFileFullError(null); setFileFullResult(null);
+    try {
+      setFileFullResult(await invoke<FullDebugResult>('debug_full_from_file', { imagePath: fileFullPath.trim() }));
+    } catch (e) { setFileFullError(String(e)); }
+    finally { setFileFullLoading(false); }
   };
 
   // ── ファイル OCR ──────────────────────────────────────────────────────────
@@ -118,12 +149,21 @@ export function OcrDebugPanel() {
               <span className="text-slate-500 text-xs">キャプチャ停止中</span>
             )}
           </div>
-          <button
-            className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
-            onClick={() => setMinimized(true)}
-          >
-            閉じる
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/40 transition-colors disabled:opacity-50"
+              onClick={handleDeleteAll}
+              disabled={deleteAllLoading}
+            >
+              {deleteAllLoading ? '削除中…' : '全記録削除'}
+            </button>
+            <button
+              className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+              onClick={() => setMinimized(true)}
+            >
+              閉じる
+            </button>
+          </div>
         </div>
 
         {/* スクロール可能なコンテンツ */}
@@ -165,6 +205,39 @@ export function OcrDebugPanel() {
             </div>
           )}
           {fullResult && <FullDebugPanel result={fullResult} />}
+
+          <hr className="border-slate-700" />
+
+          {/* ── ファイルから全パイプライン診断 ───────────────────────────── */}
+          <section>
+            <p className="text-violet-300 text-xs font-semibold mb-1">ファイルからモデル診断 (WGC 不使用)</p>
+            <p className="text-slate-500 text-xs mb-2 leading-relaxed">
+              キャプチャ停止中でも PNG を渡して YOLO+OCR パイプライン全体を確認できます。<br />
+              「モデル診断」で <code className="text-amber-400">get_frame timed out</code> が出る場合はこちらを使ってください。
+            </p>
+            <div className="flex gap-2 mb-2">
+              <input
+                className="flex-1 bg-slate-800 text-white placeholder-slate-500 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-violet-500"
+                placeholder="C:\Users\...\result.png"
+                value={fileFullPath}
+                onChange={(e) => setFileFullPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runFileFullDiag()}
+              />
+              <button
+                className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+                onClick={runFileFullDiag}
+                disabled={fileFullLoading || !fileFullPath.trim()}
+              >
+                {fileFullLoading ? '…' : 'ファイル診断'}
+              </button>
+            </div>
+            {fileFullError && (
+              <div className="bg-red-900/50 border border-red-700 rounded-lg p-2 mb-2 text-red-300 text-xs break-all">
+                ❌ {fileFullError}
+              </div>
+            )}
+            {fileFullResult && <FullDebugPanel result={fileFullResult} />}
+          </section>
 
           <hr className="border-slate-700" />
 
@@ -568,9 +641,9 @@ function OcrDebugSection({ ocr }: { ocr: OcrDebugResult }) {
         )}
       </div>
       {fields.map(({ label, field }) => (
-        <div key={label} className="bg-slate-900 rounded px-1.5 py-0.5">
+        <div key={label} className="bg-slate-900 rounded px-1.5 py-1">
           <div className="flex items-start gap-2">
-            <span className="text-slate-500 w-16 shrink-0">{label}</span>
+            <span className="text-slate-500 w-16 shrink-0 pt-0.5">{label}</span>
             <div className="flex-1 min-w-0">
               <p className="text-slate-300 font-mono truncate">
                 {field.raw || <span className="text-slate-600">(空)</span>}
@@ -583,6 +656,15 @@ function OcrDebugSection({ ocr }: { ocr: OcrDebugResult }) {
                 <p className="text-slate-600">→ 検出なし</p>
               )}
             </div>
+            {field.crop_image_base64 && (
+              <div className="bg-black rounded overflow-hidden shrink-0 border border-slate-700">
+                <img
+                  src={`data:image/png;base64,${field.crop_image_base64}`}
+                  style={{ imageRendering: 'pixelated', height: '36px', width: 'auto', maxWidth: '120px', objectFit: 'contain' }}
+                  alt={`${label} crop`}
+                />
+              </div>
+            )}
           </div>
         </div>
       ))}

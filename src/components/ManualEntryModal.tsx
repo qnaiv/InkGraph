@@ -138,6 +138,31 @@ export function ManualEntryModal({ initialMatch, onClose, onSubmit }: Props) {
         </div>
 
         <div className="p-5 space-y-4">
+          {/* OCR認識時のキャプチャ画像（自動記録分のみ表示） */}
+          {isEdit && (initialMatch?.crop_image_header_base64 || initialMatch?.crop_image_base64) && (
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">認識時のキャプチャ画像</label>
+              <div className="space-y-1">
+                {initialMatch?.crop_image_header_base64 && (
+                  <img
+                    src={`data:image/png;base64,${initialMatch.crop_image_header_base64}`}
+                    alt="ヘッダー"
+                    className="w-full rounded border border-slate-600"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                )}
+                {initialMatch?.crop_image_base64 && (
+                  <img
+                    src={`data:image/png;base64,${initialMatch.crop_image_base64}`}
+                    alt="スタッツ"
+                    className="w-full rounded border border-slate-600"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 日時 */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">日時</label>

@@ -20,6 +20,8 @@ export interface Match {
   auto_recorded: boolean;
   created_at?: string;
   updated_at?: string;
+  crop_image_base64?: string | null;
+  crop_image_header_base64?: string | null;
 }
 
 export interface MatchDetectedPayload {
@@ -84,6 +86,7 @@ export interface YoloDebugDetection {
 export interface OcrDebugField {
   raw: string;
   normalized: string | null;
+  crop_image_base64: string | null;
 }
 
 export interface OcrDebugResult {

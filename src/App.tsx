@@ -21,7 +21,8 @@ export default function App() {
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
-  const { matches, error, addMatch, updateMatch } = useMatches(selectedRule);
+  const { matches, error, addMatch, updateMatch, clearAllMatches } =
+    useMatches(selectedRule);
 
   const handleEditSubmit = async (raw: RawMatch) => {
     await updateMatch(raw);
@@ -113,7 +114,14 @@ export default function App() {
       )}
 
       {/* 開発モード専用: OCR デバッグパネル */}
-      {import.meta.env.DEV && <OcrDebugPanel />}
+      {import.meta.env.DEV && (
+        <OcrDebugPanel
+          onDeleteAll={async () => {
+            await clearAllMatches();
+            setHistoryRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

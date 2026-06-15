@@ -8,6 +8,7 @@ pub mod db;
 pub mod detector;
 pub mod extractor;
 pub mod ocr;
+pub mod ocr_rec;
 pub mod preprocess;
 pub mod screen_state;
 pub mod state;
@@ -17,6 +18,7 @@ use state::AppState;
 use commands::{
     debug_capture,
     debug_full,
+    debug_full_from_file,
     list_windows,
     start_capture,
     stop_capture,
@@ -29,6 +31,9 @@ pub fn run() {
         // ── プラグイン ──────────────────────────────────────────────────
         .plugin(tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Info)
+            .target(tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir { file_name: Some("inkgraph".into()) },
+            ))
             .build())
         .plugin(tauri_plugin_sql::Builder::default()
             .add_migrations(
@@ -82,6 +87,12 @@ pub fn run() {
                         sql: include_str!("../migrations/008_add_auto_recorded.sql"),
                         kind: tauri_plugin_sql::MigrationKind::Up,
                     },
+                    tauri_plugin_sql::Migration {
+                        version: 9,
+                        description: "add crop_image_base64 columns",
+                        sql: include_str!("../migrations/009_add_crop_images.sql"),
+                        kind: tauri_plugin_sql::MigrationKind::Up,
+                    },
                 ],
             )
             .build())
@@ -97,6 +108,7 @@ pub fn run() {
             stop_capture,
             debug_capture,
             debug_full,
+            debug_full_from_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running InkGraph");

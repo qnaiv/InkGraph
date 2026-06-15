@@ -33,7 +33,8 @@ export async function selectMatches(
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
     kill_count, death_count, special_count, paint_count, xp_after, gold_award_count,
-    tags, note, auto_recorded, created_at, updated_at
+    tags, note, auto_recorded, created_at, updated_at,
+    crop_image_base64, crop_image_header_base64
   `;
   if (rule) {
     return db.select<RawMatch[]>(
@@ -62,8 +63,9 @@ export async function insertMatch(m: RawMatch, autoRecorded: boolean): Promise<v
   await db.execute(
     `INSERT INTO matches
        (id, played_at, mode, rule, stage, weapon, result,
-        kill_count, death_count, special_count, paint_count, xp_after, gold_award_count, tags, note, auto_recorded)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        kill_count, death_count, special_count, paint_count, xp_after, gold_award_count, tags, note, auto_recorded,
+        crop_image_base64, crop_image_header_base64)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [
       m.id,
       m.played_at,
@@ -81,6 +83,8 @@ export async function insertMatch(m: RawMatch, autoRecorded: boolean): Promise<v
       m.tags ?? '[]',
       m.note ?? null,
       autoRecorded ? 1 : 0,
+      m.crop_image_base64       ?? null,
+      m.crop_image_header_base64 ?? null,
     ],
   );
 }
@@ -99,19 +103,23 @@ export async function updateMatchResult(m: RawMatch): Promise<void> {
     `UPDATE matches
      SET result = $1, mode = $2, rule = $3, stage = $4,
          kill_count = $5, death_count = $6, special_count = $7, paint_count = $8,
-         xp_after = $9, gold_award_count = $10, updated_at = CURRENT_TIMESTAMP
-     WHERE id = $11`,
+         xp_after = $9, gold_award_count = $10,
+         crop_image_base64 = $11, crop_image_header_base64 = $12,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $13`,
     [
       m.result,
-      m.mode             ?? null,
-      m.rule             ?? null,
-      m.stage            ?? null,
-      m.kill_count       ?? null,
-      m.death_count      ?? null,
-      m.special_count    ?? null,
-      m.paint_count      ?? null,
-      m.xp_after         ?? null,
-      m.gold_award_count ?? null,
+      m.mode                      ?? null,
+      m.rule                      ?? null,
+      m.stage                     ?? null,
+      m.kill_count                ?? null,
+      m.death_count               ?? null,
+      m.special_count             ?? null,
+      m.paint_count               ?? null,
+      m.xp_after                  ?? null,
+      m.gold_award_count          ?? null,
+      m.crop_image_base64         ?? null,
+      m.crop_image_header_base64  ?? null,
       m.id,
     ],
   );
@@ -126,6 +134,8 @@ export async function updateMatchResult(m: RawMatch): Promise<void> {
  *
  * 編集ダイアログを開いて保存する操作そのものが「ユーザーによる確定」を意味するため、
  * auto_recorded フラグを 0 (確定済み) にリセットする。
+ * crop_image_base64 / crop_image_header_base64 は自動記録時の参照用データのため、
+ * 手動編集では上書きしない（SET 句に含めない）。
  */
 export async function dbUpdateFullMatch(m: RawMatch): Promise<void> {
   const db = await getDb();
@@ -162,13 +172,20 @@ export async function dbDeleteMatch(id: string): Promise<void> {
   await db.execute('DELETE FROM matches WHERE id = $1', [id]);
 }
 
+/** 全試合レコードを削除する */
+export async function dbDeleteAllMatches(): Promise<void> {
+  const db = await getDb();
+  await db.execute('DELETE FROM matches', []);
+}
+
 /** 全試合を取得する (件数上限なし) */
 export async function selectAllMatches(rule?: string | null): Promise<RawMatch[]> {
   const db = await getDb();
   const cols = `
     id, played_at, mode, rule, stage, weapon, result,
     kill_count, death_count, special_count, paint_count, xp_after, gold_award_count,
-    tags, note, auto_recorded, created_at, updated_at
+    tags, note, auto_recorded, created_at, updated_at,
+    crop_image_base64, crop_image_header_base64
   `;
   if (rule) {
     return db.select<RawMatch[]>(

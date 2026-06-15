@@ -43,7 +43,7 @@ base64    = "0.22"
 # download-binaries: ビルド時に ORT を自動ダウンロードして静的リンク
 # tls-native:        download-binaries の HTTPS 通信に Windows 標準 TLS を使用
 # ※ load-dynamic を外すことで download-binaries が有効になる
-ort     = { version = "=2.0.0-rc.12", features = ["download-binaries", "tls-native"] }
+ort          = { version = "=2.0.0-rc.12", features = ["download-binaries", "tls-native"] }
 
 # 画像処理 (前処理・リサイズ・二値化)
 image     = "0.25"

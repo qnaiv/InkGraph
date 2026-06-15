@@ -28,6 +28,8 @@ pub struct Match {
     pub note: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub crop_image_base64: Option<String>,
+    pub crop_image_header_base64: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,11 +137,12 @@ pub struct YoloDebugDetection {
     pub y2: f32,
 }
 
-/// OCR デバッグ: 1フィールド分の生テキスト + 正規化後
+/// OCR デバッグ: 1フィールド分の生テキスト + 正規化後 + クロップ画像 (base64 PNG)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrDebugField {
     pub raw: String,
     pub normalized: Option<String>,
+    pub crop_image_base64: Option<String>,
 }
 
 /// カスケードデバッグ: Model 2 の1検出エントリ（グループ割り当て付き）
