@@ -17,11 +17,12 @@ type ResultFilter = 'all' | 'win' | 'lose';
 
 interface Props {
   onEdit: (match: Match) => void;
+  onAddNew?: () => void;
   /** 更新時にインクリメントされると一覧を再取得する */
   refreshKey: number;
 }
 
-export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
+export function MatchHistoryPage({ onEdit, onAddNew, refreshKey }: Props) {
   const [allMatches, setAllMatches] = useState<Match[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
@@ -105,8 +106,18 @@ export function MatchHistoryPage({ onEdit, refreshKey }: Props) {
           ))}
         </div>
 
+        {/* 手動入力ボタン */}
+        {onAddNew && (
+          <button
+            className="ml-auto px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
+            onClick={onAddNew}
+          >
+            + 手動入力
+          </button>
+        )}
+
         {/* 集計 */}
-        <div className="ml-auto text-xs text-slate-500 shrink-0">
+        <div className="text-xs text-slate-500 shrink-0">
           {filtered.length}件
           {winRate != null && (
             <span className="ml-2">
