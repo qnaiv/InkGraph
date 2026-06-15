@@ -11,12 +11,17 @@ export interface Match {
   kill_count: number | null;
   death_count: number | null;
   special_count: number | null;
+  paint_count: number | null;
   xp_after: number | null;
   gold_award_count: number | null;
   tags: string[]; // フロントエンドでは配列として扱う
   note: string | null;
+  /** キャプチャによる自動認識で作成され、まだ編集ダイアログで確定保存されていないか */
+  auto_recorded: boolean;
   created_at?: string;
   updated_at?: string;
+  crop_image_base64?: string | null;
+  crop_image_header_base64?: string | null;
 }
 
 export interface MatchDetectedPayload {
@@ -24,9 +29,10 @@ export interface MatchDetectedPayload {
   ocr_confidence: number;
 }
 
-/** Rust から届く生データ (tags が JSON 文字列) */
-export interface RawMatch extends Omit<Match, 'tags'> {
+/** Rust から届く生データ (tags が JSON 文字列、auto_recorded が無い場合がある) */
+export interface RawMatch extends Omit<Match, 'tags' | 'auto_recorded'> {
   tags: string | null; // JSON 配列文字列
+  auto_recorded?: number; // SQLite からは 0 / 1 の数値で返る
 }
 
 export interface WindowInfo {
@@ -80,6 +86,7 @@ export interface YoloDebugDetection {
 export interface OcrDebugField {
   raw: string;
   normalized: string | null;
+  crop_image_base64: string | null;
 }
 
 export interface OcrDebugResult {
@@ -99,6 +106,61 @@ export interface YoloDebugResult {
   detections: YoloDebugDetection[];
   ocr: OcrDebugResult | null;
   error: string | null;
+}
+
+export interface CascadeDebugDetection {
+  class_name: string;
+  confidence: number;
+  x_center: number;
+  group: 'paint' | 'kill' | 'death' | 'special' | 'anchor_kill' | 'anchor_death' | 'anchor_special' | 'ignored';
+}
+
+export interface HeaderDebugDetection {
+  class_name: string;
+  confidence: number;
+  x_center: number;
+}
+
+export interface HeaderDebugResult {
+  frame_w: number;
+  frame_h: number;
+  crop_x: number;
+  crop_y: number;
+  crop_w: number;
+  crop_h: number;
+  crop_image_base64: string | null;
+  detections: HeaderDebugDetection[];
+  mode: string | null;
+  rule: string | null;
+  stage: string | null;
+  error: string | null;
+}
+
+export interface FullDebugResult {
+  frame_w: number;
+  frame_h: number;
+  // Model 1
+  model1_loaded: boolean;
+  detections: YoloDebugDetection[];
+  ocr: OcrDebugResult | null;
+  // Cascade / Model 2
+  model2_loaded: boolean;
+  arrow_found: boolean;
+  crop_x: number;
+  crop_y: number;
+  crop_w: number;
+  crop_h: number;
+  crop_image_base64: string | null;
+  cascade_detections: CascadeDebugDetection[];
+  kill_anchor_x: number | null;
+  death_anchor_x: number | null;
+  special_anchor_x: number | null;
+  paint: number | null;
+  kill: number | null;
+  death: number | null;
+  special: number | null;
+  error: string | null;
+  header: HeaderDebugResult;
 }
 
 export interface XpDataPoint {

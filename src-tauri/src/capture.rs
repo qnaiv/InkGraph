@@ -17,8 +17,10 @@ pub use windows_impl::*;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::*;
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
     use windows::{
         core::{IInspectable, Interface},
+        Foundation::TypedEventHandler,
         Graphics::{
             Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
             DirectX::{
@@ -106,10 +108,12 @@ mod windows_impl {
     /// D3D11 デバイスと WGC セッションを保持する。
     /// ループ開始時に一度だけ作成し、フレームごとに `get_frame()` を呼ぶ。
     pub struct WindowCaptureSession {
-        d3d_device:  ID3D11Device,
-        d3d_context: ID3D11DeviceContext,
-        frame_pool:  Direct3D11CaptureFramePool,
-        session:     GraphicsCaptureSession,
+        d3d_device:    ID3D11Device,
+        d3d_context:   ID3D11DeviceContext,
+        frame_pool:    Direct3D11CaptureFramePool,
+        session:       GraphicsCaptureSession,
+        /// FrameArrived イベントが発火したことを示すフラグ
+        frame_arrived: Arc<AtomicBool>,
     }
 
     impl WindowCaptureSession {
@@ -151,35 +155,75 @@ mod windows_impl {
             let frame_pool = Direct3D11CaptureFramePool::Create(
                 &winrt_device,
                 DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                2,    // バッファ数 2 で安定性向上
+                2,
                 size,
             )?;
+
+            // FrameArrived イベントでフラグを立てる (ポーリングより確実)
+            let frame_arrived = Arc::new(AtomicBool::new(false));
+            let flag = frame_arrived.clone();
+            frame_pool.FrameArrived(&TypedEventHandler::new(move |_, _| {
+                flag.store(true, Ordering::Relaxed);
+                Ok(())
+            }))?;
+
             let session = frame_pool.CreateCaptureSession(&item)?;
             session.StartCapture()?;
-
-            // WGC が最初のフレームを届けるまで少し待つ
-            std::thread::sleep(std::time::Duration::from_millis(150));
             log::info!("[capture] WGC session started (hwnd={hwnd_val})");
 
-            Ok(Self { d3d_device, d3d_context, frame_pool, session })
+            Ok(Self { d3d_device, d3d_context, frame_pool, session, frame_arrived })
         }
 
-        /// 最新フレームを BGRA8 として取得する (最大 500ms 待機)
+        /// 最新フレームを BGRA8 として取得する。
+        ///
+        /// # 取得戦略 (2フェーズ)
+        ///
+        /// 1. まず `TryGetNextFrame` を直接ポーリング (500ms)。
+        ///    静止した画面でも WGC のバッファにフレームが残っている場合はすぐ取得できる。
+        ///
+        /// 2. バッファが空なら `FrameArrived` フラグが立つまで最大 3 秒待機する。
+        ///    注意: `FrameArrived` は Tokio worker スレッドの中で待つとデッドロックする
+        ///    ことがある (同一スレッドへのコールバック競合)。このメソッドは
+        ///    `std::thread::spawn` で生成した専用スレッドからのみ呼ぶこと。
         pub fn get_frame(&self) -> Result<CapturedFrame> {
             use std::time::{Duration, Instant};
-            let deadline = Instant::now() + Duration::from_millis(500);
 
-            let frame = loop {
+            // フェーズ 1: バッファに既存フレームがあれば即取得 (500ms 以内)
+            let phase1_deadline = Instant::now() + Duration::from_millis(500);
+            let maybe_frame = loop {
                 if let Ok(f) = self.frame_pool.TryGetNextFrame() {
-                    break f;
+                    break Some(f);
                 }
-                if Instant::now() > deadline {
-                    anyhow::bail!("get_frame timed out");
+                if Instant::now() > phase1_deadline {
+                    break None;
                 }
                 std::thread::sleep(Duration::from_millis(5));
             };
 
-            let surface = frame.Surface()?;
+            let wgc_frame = if let Some(f) = maybe_frame {
+                f
+            } else {
+                // フェーズ 2: FrameArrived イベントを最大 3 秒待機
+                // (専用スレッドで呼ばれているので Tokio との競合はない)
+                let deadline = Instant::now() + Duration::from_secs(3);
+                loop {
+                    if self.frame_arrived.swap(false, Ordering::Relaxed) {
+                        match self.frame_pool.TryGetNextFrame() {
+                            Ok(f) => break f,
+                            Err(e) => anyhow::bail!("TryGetNextFrame failed after FrameArrived: {e}"),
+                        }
+                    }
+                    if Instant::now() > deadline {
+                        anyhow::bail!(
+                            "get_frame timed out (FrameArrived イベントが 3 秒以内に発火しなかった。\
+                             hwnd が無効か、ウィンドウが最小化されている可能性がある)"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            };
+
+            let surface = wgc_frame.Surface()?;
             let (bgra, width, height) =
                 surface_to_bgra8(&self.d3d_device, &surface, &self.d3d_context)?;
             Ok(CapturedFrame { bgra, width, height })
@@ -259,4 +303,75 @@ pub struct CapturedFrame {
     pub bgra:   Vec<u8>,
     pub width:  u32,
     pub height: u32,
+}
+
+// ---------------------------------------------------------------------------
+// ファイルから CapturedFrame を生成 (デバッグ・テスト用、全プラットフォーム共通)
+// ---------------------------------------------------------------------------
+
+/// PNG / JPEG / BMP 等の画像ファイルを読み込んで CapturedFrame (BGRA8) に変換する。
+/// WGC を使わないため、キャプチャカード画像や CI 上のテスト PNG を直接渡せる。
+pub fn frame_from_file(path: &str) -> Result<CapturedFrame> {
+    let img = image::open(path)
+        .map_err(|e| anyhow::anyhow!("画像ファイルの読み込み失敗 ({path}): {e}"))?
+        .into_rgba8(); // RGBA8 として読む
+    let width  = img.width();
+    let height = img.height();
+    // image crate は RGBA 順なので BGRA に変換する
+    let bgra: Vec<u8> = img
+        .pixels()
+        .flat_map(|p| [p[2], p[1], p[0], p[3]]) // R,G,B,A → B,G,R,A
+        .collect();
+    Ok(CapturedFrame { bgra, width, height })
+}
+
+// ---------------------------------------------------------------------------
+// テスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// frame_from_file は存在しないファイルに対してエラーを返す。
+    /// (クロスプラットフォーム; Ubuntu CI でも実行可能)
+    #[test]
+    fn frame_from_file_missing_returns_error() {
+        let result = frame_from_file("/nonexistent/path/frame.png");
+        assert!(result.is_err(), "存在しないパスはエラーになるはず");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("画像ファイルの読み込み失敗"),
+            "エラーメッセージが期待通りでない: {msg}"
+        );
+    }
+
+    /// frame_from_file は PNG を正しく BGRA8 に変換する。
+    /// 2×1 ピクセルの最小 PNG をメモリ上で作成して検証する。
+    #[test]
+    fn frame_from_file_bgra_conversion() {
+        // 2×1 ピクセル (赤 + 透明) の PNG を一時ファイルに書く
+        // image crate で PNG エンコード
+        let mut img = image::RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255])); // 赤 (R=255, G=0, B=0, A=255)
+        img.put_pixel(1, 0, image::Rgba([0, 128, 64, 200])); // 緑がかった色
+
+        let tmp = std::env::temp_dir().join("inkgraph_test_frame.png");
+        img.save(&tmp).expect("テスト用 PNG の保存に失敗");
+
+        let frame = frame_from_file(tmp.to_str().unwrap())
+            .expect("PNG の読み込みに失敗");
+
+        assert_eq!(frame.width, 2);
+        assert_eq!(frame.height, 1);
+        assert_eq!(frame.bgra.len(), 2 * 1 * 4); // 各ピクセル 4 バイト
+
+        // ピクセル 0: R=255, G=0, B=0, A=255 → BGRA = [0, 0, 255, 255]
+        assert_eq!(&frame.bgra[0..4], &[0u8, 0, 255, 255], "ピクセル0の BGRA 変換が不正");
+
+        // ピクセル 1: R=0, G=128, B=64, A=200 → BGRA = [64, 128, 0, 200]
+        assert_eq!(&frame.bgra[4..8], &[64u8, 128, 0, 200], "ピクセル1の BGRA 変換が不正");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

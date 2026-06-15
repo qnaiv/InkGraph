@@ -128,6 +128,39 @@ pub fn letterbox_bgra(
 }
 
 // ---------------------------------------------------------------------------
+// YOLO 入力用: ストレッチリサイズ（アスペクト比無視）
+// ---------------------------------------------------------------------------
+
+/// BGRA8 フレームを `target_size × target_size` にアスペクト比を無視してリサイズし、
+/// CHW 形式の f32 テンソル (0.0–1.0) を返す。
+///
+/// Roboflow の "Stretch" リサイズ設定で学習したモデルに使用する。
+/// レターボックスと異なりパディングがないため、座標は単純に `[0,1]` へ正規化できる。
+pub fn stretch_bgra(
+    bgra:        &[u8],
+    frame_w:     u32,
+    frame_h:     u32,
+    target_size: u32,
+) -> Result<Vec<f32>> {
+    let rgb = bgra_to_rgb_image(bgra, frame_w, frame_h);
+    let resized = DynamicImage::ImageRgb8(rgb)
+        .resize_exact(target_size, target_size, image::imageops::FilterType::Lanczos3)
+        .to_rgb8();
+
+    let ts = target_size as usize;
+    let mut chw = vec![0f32; 3 * ts * ts];
+    for y in 0..ts {
+        for x in 0..ts {
+            let px = resized.get_pixel(x as u32, y as u32);
+            chw[0 * ts * ts + y * ts + x] = px[0] as f32 / 255.0; // R
+            chw[1 * ts * ts + y * ts + x] = px[1] as f32 / 255.0; // G
+            chw[2 * ts * ts + y * ts + x] = px[2] as f32 / 255.0; // B
+        }
+    }
+    Ok(chw)
+}
+
+// ---------------------------------------------------------------------------
 // OCR 前処理: 白文字抽出 + 二値化
 // ---------------------------------------------------------------------------
 
@@ -135,7 +168,7 @@ pub fn letterbox_bgra(
 ///
 /// スプラトゥーン3 のリザルト画面はインクエフェクト背景に白文字が重なるため、
 /// 「V (明度) が高く S (彩度) が低い = 白系」ピクセルを保持し他を黒に落とす。
-pub fn extract_white_text(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
+pub fn extract_white_text(bgra: &[u8], _width: u32, _height: u32) -> Vec<u8> {
     let mut out = vec![0u8; bgra.len()];
     for (i, chunk) in bgra.chunks_exact(4).enumerate() {
         let b = chunk[0] as f32;
